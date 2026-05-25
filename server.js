@@ -1,5 +1,6 @@
 import express from 'express';
 import { XMLParser } from 'fast-xml-parser';
+import { Redis } from '@upstash/redis';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,7 +22,42 @@ app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res) => { res.setHeader('Cache-Control', 'no-store, must-revalidate'); }
 }));
 
+// Redis для персистентности купивших Pro. Если env-переменные не заданы —
+// работаем только в памяти (платежи теряются при рестарте; ОК для dev/тестов).
+const redis = (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN)
+  ? new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN
+    })
+  : null;
+const PAID_KEY = 'paid_users';
+
 const paidUsers = new Set();
+
+async function loadPaidUsers() {
+  if (!redis) return;
+  try {
+    const ids = await redis.smembers(PAID_KEY);
+    for (const id of ids || []) {
+      const n = Number(id);
+      if (Number.isFinite(n)) paidUsers.add(n);
+    }
+    console.log(`Loaded ${paidUsers.size} paid user(s) from Redis`);
+  } catch (err) {
+    console.error('Failed to load paid users from Redis:', err);
+  }
+}
+
+async function markUserPaid(userId) {
+  paidUsers.add(userId);
+  if (!redis) return;
+  try {
+    await redis.sadd(PAID_KEY, String(userId));
+  } catch (err) {
+    console.error('Failed to persist paid user to Redis:', err);
+  }
+}
+
 function isUnlocked(userId) {
   return ADMIN_USER_IDS.has(userId) || paidUsers.has(userId);
 }
@@ -242,7 +278,7 @@ app.post(webhookPath, async (req, res) => {
     // с from.id сообщения — защита от подменённых webhook-запросов.
     const [, payloadUserId] = payment.invoice_payload.split(':');
     if (userId && Number(payloadUserId) === userId) {
-      paidUsers.add(userId);
+      await markUserPaid(userId);
       console.log(`Unlocked Pro for user ${userId} (${payment.total_amount} stars)`);
     } else {
       console.warn('Payment payload mismatch — ignoring', { payloadUserId, userId });
@@ -252,11 +288,18 @@ app.post(webhookPath, async (req, res) => {
   res.json({ ok: true });
 });
 
+await loadPaidUsers();
+
 app.listen(PORT, () => {
   console.log(`Converter++ running on http://localhost:${PORT}`);
   if (!BOT_TOKEN) {
     console.log('⚠️  BOT_TOKEN не задан — Stars-платежи отключены. Создайте бота в @BotFather и положите токен в .env.');
   } else {
     console.log(`Webhook path: ${webhookPath}`);
+  }
+  if (!redis) {
+    console.log('⚠️  UPSTASH_REDIS_* не задан — платежи в памяти (теряются при рестарте). Только для dev.');
+  } else {
+    console.log(`Redis persistence active. ${ADMIN_USER_IDS.size} admin(s), ${paidUsers.size} paid user(s) loaded.`);
   }
 });
