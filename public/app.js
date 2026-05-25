@@ -162,22 +162,22 @@ function showToast(msg) {
 function formatAmount(n) {
   if (!Number.isFinite(n)) return '—';
   const abs = Math.abs(n);
-  const d = abs >= 1000 ? 2 : abs >= 1 ? 4 : 8;
+  // 2 знака для нормальных значений (фиат), 8 для дробной крипты (< 1)
+  const d = abs >= 1 ? 2 : 8;
   return n.toLocaleString('ru-RU', { maximumFractionDigits: d });
 }
 
 function formatRate(n) {
   if (!Number.isFinite(n)) return '—';
   const abs = Math.abs(n);
-  if (abs >= 100) return n.toFixed(2);
-  if (abs >= 1) return n.toFixed(4);
+  if (abs >= 1) return n.toFixed(2);
   return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 function formatForInput(n) {
   if (!Number.isFinite(n)) return '';
   const abs = Math.abs(n);
-  const d = abs >= 1000 ? 2 : abs >= 1 ? 4 : 8;
+  const d = abs >= 1 ? 2 : 8;
   return n.toFixed(d).replace(/\.?0+$/, '');
 }
 
@@ -410,11 +410,24 @@ function renderSummary(flow) {
   const lossText = Math.abs(lossPct) > 0.005
     ? `<span class="${lossPct > 0 ? 'loss' : 'gain'}">${lossPct > 0 ? '−' : '+'}${Math.abs(lossPct).toFixed(2)}%</span>`
     : '';
+
+  // Сколько съела комиссия: считаем, какой был бы last.amount, если бы все fee = 0%.
+  // multiplier = ∏(1 − fee_i/100). theoretical_last = actual_last / multiplier. eaten = theoretical − actual.
+  const feeMul = flow.slice(1).reduce((acc, row) => acc * (1 - (row.fee || 0) / 100), 1);
+  const eaten = feeMul > 0 ? last.amount * (1 / feeMul - 1) : 0;
+  const feeRow = eaten > 0
+    ? `<div class="sum-row">
+         <span class="sum-label">Комиссия съела</span>
+         <span class="sum-value">${formatAmount(eaten)} ${tickerHtml(last.code)}</span>
+       </div>`
+    : '';
+
   el.summary.innerHTML = `
     <div class="sum-row">
       <span class="sum-label">Эффективный курс</span>
       <span class="sum-value">1 ${tickerHtml(first.code)} = ${formatRate(rate)} ${tickerHtml(last.code)} ${lossText}</span>
     </div>
+    ${feeRow}
   `;
 }
 
