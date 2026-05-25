@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: converter-plus-plus
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: STARS_PRICE
+        value: "100"
+      - key: BOT_TOKEN
+        sync: false

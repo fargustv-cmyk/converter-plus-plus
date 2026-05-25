@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="format-detection" content="telephone=no,date=no,address=no,email=no,url=no">
+  <title>Converter++ — многоступенчатая конвертация валют</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <meta name="theme-color" content="#0066ff">
+  <meta name="description" content="Многоступенчатая конвертация валют. Курсы ЦБ РФ и крипта. Свой курс и комиссия на каждой ступени.">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=7">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Converter<span class="brand-pro" id="brandPro">Pro</span><span class="accent">++</span></h1>
+      <p class="subtitle">Многоступенчатая конвертация</p>
+    </header>
+
+    <div class="source-tabs" role="tablist">
+      <button type="button" class="tab active" data-source="cbr" role="tab">ЦБ РФ</button>
+      <button type="button" class="tab" data-source="open" role="tab">Открытые курсы · крипта</button>
+    </div>
+
+    <section class="chain" id="chain"></section>
+
+    <div class="chain-actions">
+      <button id="addStep" type="button" class="ghost">＋ Добавить ступень</button>
+      <button id="reverseChain" type="button" class="ghost icon-only" title="Развернуть" aria-label="Развернуть">⇅</button>
+    </div>
+
+    <section class="summary" id="summary"></section>
+
+    <section id="proSection" class="pro">
+      <div class="pro-card">
+        <div class="pro-icon">✨</div>
+        <div class="pro-body">
+          <div class="pro-title">Полная версия</div>
+          <p class="pro-text">Свой курс и комиссия на каждой ступени — для Steam, банков, обменников.</p>
+          <div class="pro-meta">
+            <span class="pro-badge">✓ Разовая покупка</span>
+            <span class="pro-badge">✓ Навсегда</span>
+            <span class="pro-badge">✓ Без подписки</span>
+          </div>
+        </div>
+        <button id="buyPro" class="pro-btn" type="button">100&nbsp;⭐</button>
+      </div>
+    </section>
+
+    <footer>
+      <span id="ratesDate" class="muted small">…</span>
+      <button type="button" class="theme-toggle" id="themeToggle" title="Сменить тему" aria-label="Сменить тему">☀</button>
+      <span id="proStatus" class="pro-status locked">🔒</span>
+    </footer>
+  </main>
+
+  <!-- Currency picker sheet -->
+  <div class="sheet-overlay hidden" id="pickerSheet" role="dialog">
+    <div class="sheet">
+      <div class="sheet-grabber"></div>
+      <div class="sheet-search-wrap">
+        <input type="search" class="sheet-search" id="pickerSearch" placeholder="Поиск валюты или кода" autocomplete="off">
+        <button type="button" class="sheet-close" id="pickerClose" aria-label="Закрыть">✕</button>
+      </div>
+      <div class="picker-tabs" id="pickerTabs">
+        <button type="button" class="picker-tab active" data-tab="popular">
+          <span class="picker-tab-name">Топ</span>
+          <span class="picker-tab-count" data-count></span>
+        </button>
+        <button type="button" class="picker-tab" data-tab="major">
+          <span class="picker-tab-name">Основные</span>
+          <span class="picker-tab-count" data-count></span>
+        </button>
+        <button type="button" class="picker-tab" data-tab="world">
+          <span class="picker-tab-name">Мир</span>
+          <span class="picker-tab-count" data-count></span>
+        </button>
+        <button type="button" class="picker-tab" data-tab="crypto">
+          <span class="picker-tab-name">Крипта</span>
+          <span class="picker-tab-count" data-count></span>
+        </button>
+      </div>
+      <div class="sheet-list" id="pickerList"></div>
+    </div>
+  </div>
+
+  <!-- Rate & fee editor sheet -->
+  <div class="sheet-overlay hidden" id="rateSheet" role="dialog">
+    <div class="sheet">
+      <div class="sheet-grabber"></div>
+      <div class="sheet-title-row">
+        <h3 class="sheet-title" id="rateSheetTitle">Настройки</h3>
+        <button type="button" class="sheet-close" id="rateClose" aria-label="Закрыть">✕</button>
+      </div>
+
+      <div class="editor-section" data-section="rate">
+        <div class="editor-head">
+          <span class="editor-icon">🏦</span>
+          <div>
+            <div class="editor-title">Свой курс</div>
+            <div class="editor-hint">Steam, банк или обменник применяют не рыночный курс. Введите его — расчёт пересчитается.</div>
+          </div>
+        </div>
+        <div class="editor-row rate-row">
+          <span>1&nbsp;<strong id="rateFromCode">—</strong></span>
+          <span class="eq">=</span>
+          <input type="number" id="rateInput" step="any" min="0" placeholder="0">
+          <strong id="rateToCode">—</strong>
+        </div>
+        <div class="editor-meta" id="rateMarket"></div>
+      </div>
+
+      <div class="editor-section" data-section="fee">
+        <div class="editor-head">
+          <span class="editor-icon">💰</span>
+          <div>
+            <div class="editor-title">Комиссия</div>
+            <div class="editor-hint">Процент, который удерживается при конвертации в эту валюту.</div>
+          </div>
+        </div>
+        <div class="editor-row fee-row">
+          <input type="number" id="feeInput" step="0.01" min="0" max="100" placeholder="0">
+          <strong>%</strong>
+        </div>
+      </div>
+
+      <div class="editor-pro-lock hidden" id="proLockBanner">
+        🔒 Доступно в полной версии — <strong>100 ⭐</strong> · разовая покупка
+      </div>
+
+      <div class="editor-actions">
+        <button type="button" class="btn-secondary" id="rateReset">Сбросить</button>
+        <button type="button" class="btn-primary" id="rateApply">Готово</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=7"></script>
+</body>
+</html>

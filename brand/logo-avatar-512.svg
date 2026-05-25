@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" width="640" height="640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0066ff"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffcc00"/>
+      <stop offset="1" stop-color="#ffa500"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" in="SourceAlpha"/>
+      <feOffset dx="0" dy="6"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.3"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Square background (no rounding) — Telegram itself crops it to a circle.
+       Composition (512×512) sits in the centre with 64px padding around it,
+       so when Telegram crops a circle ~radius 320, all elements stay inside. -->
+  <rect width="640" height="640" fill="url(#bg)"/>
+
+  <!-- Composition shifted by (64, 64) into the centre -->
+  <g transform="translate(64 64)">
+    <!-- Top circle: dollar -->
+    <circle cx="178" cy="178" r="92" fill="#ffffff" filter="url(#shadow)"/>
+    <text x="178" y="178" dy="0.35em"
+          font-family="-apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
+          font-size="138" font-weight="800"
+          fill="#0066ff"
+          text-anchor="middle">$</text>
+
+    <!-- Bottom-right circle: ruble -->
+    <circle cx="334" cy="334" r="92" fill="#ffffff" filter="url(#shadow)"/>
+    <text x="334" y="334" dy="0.34em"
+          font-family="-apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
+          font-size="128" font-weight="800"
+          fill="#7c3aed"
+          text-anchor="middle">₽</text>
+
+    <!-- Conversion arrows between the two coins -->
+    <g stroke="#ffffff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.95">
+      <path d="M 248 188 L 296 236"/>
+      <path d="M 296 218 L 296 236 L 278 236"/>
+      <path d="M 264 324 L 216 276"/>
+      <path d="M 216 294 L 216 276 L 234 276"/>
+    </g>
+
+    <!-- Gold "++" badge in top-right corner -->
+    <g transform="translate(360, 28)" filter="url(#shadow)">
+      <rect x="0" y="0" width="124" height="78" rx="38" fill="url(#gold)"/>
+      <text x="62" y="39" dy="0.35em"
+            font-family="-apple-system, 'Segoe UI', Roboto, sans-serif"
+            font-size="48" font-weight="900"
+            fill="#ffffff"
+            text-anchor="middle"
+            letter-spacing="-2">++</text>
+    </g>
+  </g>
+</svg>
