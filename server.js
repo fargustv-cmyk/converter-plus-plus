@@ -10,6 +10,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const STARS_PRICE = Number(process.env.STARS_PRICE) || 100;
+// Список Telegram user ID, которые всегда имеют Pro (без оплаты). Через запятую.
+const ADMIN_USER_IDS = new Set(
+  (process.env.ADMIN_USER_IDS || '').split(',').map(s => Number(s.trim())).filter(Boolean)
+);
 
 const app = express();
 app.use(express.json());
@@ -18,6 +22,9 @@ app.use(express.static(path.join(__dirname, 'public'), {
 }));
 
 const paidUsers = new Set();
+function isUnlocked(userId) {
+  return ADMIN_USER_IDS.has(userId) || paidUsers.has(userId);
+}
 
 const ratesCache = new Map();
 const RATES_TTL_MS = 60 * 60 * 1000;
@@ -178,7 +185,7 @@ app.post('/api/me', (req, res) => {
   const user = verifyInitData(req.body?.initData);
   if (!user) return res.json({ unlocked: false });
   res.json({
-    unlocked: paidUsers.has(user.id),
+    unlocked: isUnlocked(user.id),
     user: { id: user.id, first_name: user.first_name }
   });
 });
@@ -231,9 +238,14 @@ app.post(webhookPath, async (req, res) => {
   const payment = update.message?.successful_payment;
   if (payment && payment.invoice_payload?.startsWith('unlock:')) {
     const userId = update.message.from?.id;
-    if (userId) {
+    // Сверяем userId из payload (мы его туда положили при createInvoiceLink)
+    // с from.id сообщения — защита от подменённых webhook-запросов.
+    const [, payloadUserId] = payment.invoice_payload.split(':');
+    if (userId && Number(payloadUserId) === userId) {
       paidUsers.add(userId);
       console.log(`Unlocked Pro for user ${userId} (${payment.total_amount} stars)`);
+    } else {
+      console.warn('Payment payload mismatch — ignoring', { payloadUserId, userId });
     }
   }
 

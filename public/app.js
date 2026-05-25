@@ -328,7 +328,8 @@ function rowHtml(row, i, opts) {
   if (isOrigin) classes.push('origin');
   if (isFinal) classes.push('final');
   if (isAnchor) classes.push('anchor');
-  const name = state.rates[row.code]?.name || tickerHtml(row.code);
+  const rateInfo = state.rates[row.code];
+  const name = rateInfo?.name ? escapeHtml(rateInfo.name) : tickerHtml(row.code);
   return `
     <div class="${classes.join(' ')}" data-index="${i}">
       <button class="cur-pick" type="button" data-pick="${i}">
@@ -584,7 +585,7 @@ function renderPickerList() {
       <span class="picker-flag">${currencyIcon(code)}</span>
       <span class="picker-text">
         <span class="picker-code">${tickerHtml(code)}</span>
-        <span class="picker-name">${state.rates[code].name || tickerHtml(code)}</span>
+        <span class="picker-name">${state.rates[code].name ? escapeHtml(state.rates[code].name) : tickerHtml(code)}</span>
       </span>
     </button>
   `).join('');
@@ -939,6 +940,6 @@ el.buyPro.addEventListener('click', async () => {
     render();
   } catch (err) {
     console.error(err);
-    document.querySelector('main').innerHTML = `<div class="error">${err.message}</div>`;
+    document.querySelector('main').innerHTML = `<div class="error">${escapeHtml(err.message || 'Ошибка')}</div>`;
   }
 })();
