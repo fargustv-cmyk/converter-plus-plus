@@ -738,9 +738,11 @@ function renderStacks() {
         <div class="stacks-lock-icon">⭐</div>
         <div class="stacks-lock-title">Сохранение цепочек — в Pro</div>
         <div class="stacks-lock-text">Сохраняйте готовые конфигурации обмена со всеми кастомными курсами и комиссиями. Возвращайтесь к любимым одним тапом.</div>
-        <div class="stacks-lock-cta">Доступно в полной версии · <strong>100 ⭐</strong></div>
+        <button type="button" class="stacks-lock-cta" id="stacksLockCta">Купить полную версию · <strong>100 ⭐</strong></button>
       </div>
     `;
+    const cta = document.getElementById('stacksLockCta');
+    if (cta) cta.addEventListener('click', () => triggerBuyPro(cta));
     return;
   }
   el.stacksSave.classList.remove('hidden');
@@ -836,7 +838,37 @@ async function checkUnlock() {
     const data = await r.json();
     state.unlocked = !!data.unlocked;
     applyUnlockUi();
+    // Если шит со стопками открыт — обновим его (paywall → unlocked-view после оплаты)
+    if (!el.stacksSheet.classList.contains('hidden')) renderStacks();
   } catch (err) { console.error('checkUnlock', err); }
+}
+
+async function triggerBuyPro(btnEl) {
+  if (!tg || !tg.initData) { showToast('Платёж доступен только в Telegram'); return; }
+  if (btnEl) btnEl.disabled = true;
+  try {
+    const r = await fetch('/api/create-invoice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initData: tg.initData })
+    });
+    const data = await r.json();
+    if (!data.link) throw new Error(data.error || 'Не удалось создать счёт');
+    tg.openInvoice(data.link, status => {
+      if (status === 'paid') {
+        showToast('Pro активирован'); hapticNotif('success');
+        setTimeout(checkUnlock, 1500);
+      } else if (status === 'failed') {
+        showToast('Платёж не прошёл'); hapticNotif('error');
+      } else if (status === 'cancelled') {
+        showToast('Платёж отменён');
+      }
+    });
+  } catch (err) {
+    showToast(err.message || 'Ошибка'); hapticNotif('error');
+  } finally {
+    if (btnEl) btnEl.disabled = false;
+  }
 }
 
 function applyUnlockUi() {
@@ -913,33 +945,10 @@ el.stacksSheet.addEventListener('click', e => {
 el.stacksSave.addEventListener('click', saveCurrentStack);
 
 el.buyPro.addEventListener('click', async () => {
-  if (!tg || !tg.initData) { showToast('Платёж доступен только в Telegram'); return; }
-  el.buyPro.disabled = true;
+  const orig = el.buyPro.textContent;
   el.buyPro.textContent = '…';
-  try {
-    const r = await fetch('/api/create-invoice', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ initData: tg.initData })
-    });
-    const data = await r.json();
-    if (!data.link) throw new Error(data.error || 'Не удалось создать счёт');
-    tg.openInvoice(data.link, status => {
-      if (status === 'paid') {
-        showToast('Pro активирован'); hapticNotif('success');
-        setTimeout(checkUnlock, 1500);
-      } else if (status === 'failed') {
-        showToast('Платёж не прошёл'); hapticNotif('error');
-      } else if (status === 'cancelled') {
-        showToast('Платёж отменён');
-      }
-    });
-  } catch (err) {
-    showToast(err.message || 'Ошибка'); hapticNotif('error');
-  } finally {
-    el.buyPro.disabled = false;
-    el.buyPro.textContent = '100 ⭐';
-  }
+  try { await triggerBuyPro(el.buyPro); }
+  finally { el.buyPro.textContent = orig; }
 });
 
 // ---------- init ----------
