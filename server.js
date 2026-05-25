@@ -12,8 +12,8 @@ const PORT = Number(process.env.PORT) || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const STARS_PRICE = Number(process.env.STARS_PRICE) || 100;
 // Список Telegram user ID, которые всегда имеют Pro (без оплаты). Через запятую.
-const ADMIN_USER_IDS = new Set(
-  (process.env.ADMIN_USER_IDS || '').split(',').map(s => Number(s.trim())).filter(Boolean)
+const PRO_USER_IDS = new Set(
+  (process.env.PRO_USER_IDS || '').split(',').map(s => Number(s.trim())).filter(Boolean)
 );
 
 const app = express();
@@ -59,7 +59,7 @@ async function markUserPaid(userId) {
 }
 
 function isUnlocked(userId) {
-  return ADMIN_USER_IDS.has(userId) || paidUsers.has(userId);
+  return PRO_USER_IDS.has(userId) || paidUsers.has(userId);
 }
 
 const ratesCache = new Map();
@@ -300,6 +300,6 @@ app.listen(PORT, () => {
   if (!redis) {
     console.log('⚠️  UPSTASH_REDIS_* не задан — платежи в памяти (теряются при рестарте). Только для dev.');
   } else {
-    console.log(`Redis persistence active. ${ADMIN_USER_IDS.size} admin(s), ${paidUsers.size} paid user(s) loaded.`);
+    console.log(`Redis persistence active. ${PRO_USER_IDS.size} admin(s), ${paidUsers.size} paid user(s) loaded.`);
   }
 });
