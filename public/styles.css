@@ -577,6 +577,7 @@ footer {
 }
 .theme-toggle:hover { background: var(--border-strong); }
 .theme-toggle:active { transform: scale(0.92); }
+.round-toggle.off { opacity: 0.4; }
 .pro-status {
   font-size: 10px;
   padding: 2px 7px;

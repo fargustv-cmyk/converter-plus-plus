@@ -11,6 +11,8 @@ const hapticNotif = (k) => { try { tg?.HapticFeedback?.notificationOccurred?.(k)
 const STORAGE_KEY = 'converter++:v4';
 const THEME_KEY = 'converter++:theme';
 const STACKS_KEY = 'converter++:stacks:v1';
+const ROUND_KEY = 'converter++:round';
+let roundMode = localStorage.getItem(ROUND_KEY) === 'off' ? 'off' : 'on';
 const THEMES = ['system', 'light', 'dark'];
 const THEME_ICONS = { system: '⚙', light: '☀', dark: '🌙' };
 const THEME_LABELS = { system: 'Системная', light: 'Светлая', dark: 'Тёмная' };
@@ -141,7 +143,8 @@ const el = {
   stacksSheet: $('stacksSheet'),
   stacksClose: $('stacksClose'),
   stacksSave: $('stacksSave'),
-  stacksList: $('stacksList')
+  stacksList: $('stacksList'),
+  roundToggle: $('roundToggle')
 };
 
 // ---------- utilities ----------
@@ -162,22 +165,26 @@ function showToast(msg) {
 function formatAmount(n) {
   if (!Number.isFinite(n)) return '—';
   const abs = Math.abs(n);
-  // 2 знака для нормальных значений (фиат), 8 для дробной крипты (< 1)
-  const d = abs >= 1 ? 2 : 8;
+  // roundMode=on: 2 знака для фиата, 8 для дробной крипты. off: 8/12 — почти без округления.
+  const d = roundMode === 'on' ? (abs >= 1 ? 2 : 8) : (abs >= 1 ? 8 : 12);
   return n.toLocaleString('ru-RU', { maximumFractionDigits: d });
 }
 
 function formatRate(n) {
   if (!Number.isFinite(n)) return '—';
   const abs = Math.abs(n);
-  if (abs >= 1) return n.toFixed(2);
-  return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+  if (roundMode === 'on') {
+    if (abs >= 1) return n.toFixed(2);
+    return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+  }
+  // Полная точность: 8 знаков, лишние нули обрезаем
+  return n.toFixed(10).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 function formatForInput(n) {
   if (!Number.isFinite(n)) return '';
   const abs = Math.abs(n);
-  const d = abs >= 1 ? 2 : 8;
+  const d = roundMode === 'on' ? (abs >= 1 ? 2 : 8) : (abs >= 1 ? 8 : 12);
   return n.toFixed(d).replace(/\.?0+$/, '');
 }
 
@@ -839,6 +846,12 @@ function deleteStack(i) {
   haptic('light');
 }
 
+function applyRoundUi() {
+  if (!el.roundToggle) return;
+  el.roundToggle.classList.toggle('off', roundMode === 'off');
+  el.roundToggle.title = roundMode === 'on' ? 'Округление: вкл (2 знака)' : 'Округление: выкл (полная точность)';
+}
+
 // ---------- pro ----------
 
 async function checkUnlock() {
@@ -907,6 +920,17 @@ if (el.themeToggle) {
   });
 }
 
+if (el.roundToggle) {
+  el.roundToggle.addEventListener('click', () => {
+    roundMode = roundMode === 'on' ? 'off' : 'on';
+    try { localStorage.setItem(ROUND_KEY, roundMode); } catch {}
+    applyRoundUi();
+    render();
+    showToast(roundMode === 'on' ? 'Округление: 2 знака' : 'Полная точность');
+    haptic('light');
+  });
+}
+
 el.addStep.addEventListener('click', () => {
   state.steps.push({ to: defaultNextCurrency(), fee: 0, customRate: null });
   haptic('light');
@@ -968,6 +992,7 @@ el.buyPro.addEventListener('click', async () => {
 
 (async () => {
   loadState();
+  applyRoundUi();
   try {
     await loadRates(state.source);
     state.from = pickFallback(state.from);
