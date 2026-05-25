@@ -10,6 +10,7 @@ const hapticNotif = (k) => { try { tg?.HapticFeedback?.notificationOccurred?.(k)
 
 const STORAGE_KEY = 'converter++:v4';
 const THEME_KEY = 'converter++:theme';
+const STACKS_KEY = 'converter++:stacks:v1';
 const THEMES = ['system', 'light', 'dark'];
 const THEME_ICONS = { system: '⚙', light: '☀', dark: '🌙' };
 const THEME_LABELS = { system: 'Системная', light: 'Светлая', dark: 'Тёмная' };
@@ -119,7 +120,7 @@ const el = {
   proStatus: $('proStatus'),
   brandPro: $('brandPro'),
   ratesDate: $('ratesDate'),
-  sourceTabs: document.querySelectorAll('.source-tabs .tab'),
+  sourceTabs: document.querySelectorAll('.source-tabs .tab[data-source]'),
   pickerSheet: $('pickerSheet'),
   pickerSearch: $('pickerSearch'),
   pickerClose: $('pickerClose'),
@@ -135,7 +136,12 @@ const el = {
   feeInput: $('feeInput'),
   rateReset: $('rateReset'),
   rateApply: $('rateApply'),
-  proLockBanner: $('proLockBanner')
+  proLockBanner: $('proLockBanner'),
+  stacksBtn: $('stacksBtn'),
+  stacksSheet: $('stacksSheet'),
+  stacksClose: $('stacksClose'),
+  stacksSave: $('stacksSave'),
+  stacksList: $('stacksList')
 };
 
 // ---------- utilities ----------
@@ -709,6 +715,100 @@ function closeSheet(sheet) {
   }, 220);
 }
 
+// ---------- saved stacks ----------
+
+function loadStacks() {
+  try {
+    const raw = localStorage.getItem(STACKS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+
+function saveStacks(stacks) {
+  try { localStorage.setItem(STACKS_KEY, JSON.stringify(stacks)); } catch {}
+}
+
+function renderStacks() {
+  const stacks = loadStacks();
+  if (!stacks.length) {
+    el.stacksList.innerHTML = '<div class="stacks-empty">Пока ничего не сохранено.<br>Соберите цепочку — и сохраните её сюда, чтобы возвращаться одним тапом.</div>';
+    return;
+  }
+  el.stacksList.innerHTML = stacks.map((s, i) => {
+    const codes = [s.from, ...s.steps.map(st => st.to)];
+    const preview = codes.map(c => tickerHtml(c)).join(' <span class="muted">→</span> ');
+    return `
+      <div class="stack-item" data-load="${i}">
+        <div class="stack-body">
+          <div class="stack-name">${escapeHtml(s.name)}</div>
+          <div class="stack-preview">${preview}</div>
+        </div>
+        <button type="button" class="stack-delete" data-delete="${i}" aria-label="Удалить">✕</button>
+      </div>
+    `;
+  }).join('');
+  for (const item of el.stacksList.querySelectorAll('[data-load]')) {
+    item.addEventListener('click', e => {
+      if (e.target.closest('[data-delete]')) return;
+      applyStack(Number(item.dataset.load));
+    });
+  }
+  for (const btn of el.stacksList.querySelectorAll('[data-delete]')) {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      deleteStack(Number(btn.dataset.delete));
+    });
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function saveCurrentStack() {
+  const defaultName = [state.from, ...state.steps.map(s => s.to)].join('→');
+  const name = (prompt('Назовите цепочку:', defaultName) || '').trim();
+  if (!name) return;
+  const stacks = loadStacks();
+  stacks.unshift({
+    name,
+    from: state.from,
+    steps: state.steps.map(s => ({ to: s.to, fee: s.fee, customRate: s.customRate })),
+    createdAt: Date.now()
+  });
+  saveStacks(stacks);
+  renderStacks();
+  showToast('Сохранено: ' + name);
+  hapticNotif('success');
+}
+
+function applyStack(i) {
+  const stacks = loadStacks();
+  const s = stacks[i];
+  if (!s) return;
+  state.from = s.from;
+  state.steps = s.steps.map(st => ({ to: st.to, fee: st.fee || 0, customRate: st.customRate || null }));
+  state.anchor = { index: 0, amount: state.anchor.amount || 100 };
+  saveState();
+  render();
+  closeSheet(el.stacksSheet);
+  showToast('Загружено: ' + s.name);
+  haptic('light');
+}
+
+function deleteStack(i) {
+  const stacks = loadStacks();
+  const s = stacks[i];
+  if (!s) return;
+  stacks.splice(i, 1);
+  saveStacks(stacks);
+  renderStacks();
+  haptic('light');
+}
+
 // ---------- pro ----------
 
 async function checkUnlock() {
@@ -786,6 +886,16 @@ for (const tab of el.sourceTabs) {
     }
   });
 }
+
+el.stacksBtn.addEventListener('click', () => {
+  renderStacks();
+  openSheet(el.stacksSheet);
+});
+el.stacksClose.addEventListener('click', () => closeSheet(el.stacksSheet));
+el.stacksSheet.addEventListener('click', e => {
+  if (e.target === el.stacksSheet) closeSheet(el.stacksSheet);
+});
+el.stacksSave.addEventListener('click', saveCurrentStack);
 
 el.buyPro.addEventListener('click', async () => {
   if (!tg || !tg.initData) { showToast('Платёж доступен только в Telegram'); return; }

@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=7">
+  <link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
   <main>
@@ -24,6 +24,7 @@
     <div class="source-tabs" role="tablist">
       <button type="button" class="tab active" data-source="cbr" role="tab">ЦБ РФ</button>
       <button type="button" class="tab" data-source="open" role="tab">Открытые курсы · крипта</button>
+      <button type="button" class="tab tab-icon" id="stacksBtn" title="Сохранённые цепочки" aria-label="Сохранённые">★</button>
     </div>
 
     <section class="chain" id="chain"></section>
@@ -88,6 +89,19 @@
     </div>
   </div>
 
+  <!-- Saved stacks sheet -->
+  <div class="sheet-overlay hidden" id="stacksSheet" role="dialog">
+    <div class="sheet">
+      <div class="sheet-grabber"></div>
+      <div class="sheet-title-row">
+        <h3 class="sheet-title">Мои цепочки</h3>
+        <button type="button" class="sheet-close" id="stacksClose" aria-label="Закрыть">✕</button>
+      </div>
+      <button type="button" class="stacks-save-btn" id="stacksSave">＋ Сохранить текущую цепочку</button>
+      <div class="sheet-list stacks-list" id="stacksList"></div>
+    </div>
+  </div>
+
   <!-- Rate & fee editor sheet -->
   <div class="sheet-overlay hidden" id="rateSheet" role="dialog">
     <div class="sheet">
@@ -139,6 +153,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

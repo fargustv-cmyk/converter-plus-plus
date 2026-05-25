@@ -175,6 +175,12 @@ header .subtitle {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 .source-tabs .tab:disabled { opacity: 0.5; cursor: wait; }
+.source-tabs .tab-icon {
+  flex: 0 0 36px;
+  padding: 9px 0;
+  font-size: 16px;
+  line-height: 1;
+}
 
 /* ─────────── Chain ─────────── */
 
@@ -913,6 +919,79 @@ footer {
 }
 .btn-primary:active, .btn-secondary:active { transform: scale(0.98); }
 .btn-primary:disabled, .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Saved stacks */
+.stacks-save-btn {
+  width: 100%;
+  background: var(--text);
+  color: var(--bg);
+  border: none;
+  border-radius: 14px;
+  padding: 13px;
+  font-size: 14px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  margin-bottom: 12px;
+  transition: transform 0.1s, opacity 0.15s;
+}
+.stacks-save-btn:active { transform: scale(0.98); }
+.stacks-list { gap: 8px; display: flex; flex-direction: column; }
+.stack-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--section-bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+.stack-item:active { transform: scale(0.99); }
+.stack-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stack-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stack-preview {
+  font-size: 12px;
+  color: var(--hint);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.stack-preview .tkr { vertical-align: baseline; }
+.stack-delete {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--hint);
+  font-size: 16px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-family: inherit;
+}
+.stack-delete:active { background: var(--secondary-bg); }
+.stacks-empty {
+  text-align: center;
+  padding: 24px;
+  color: var(--hint);
+  font-size: 13px;
+}
 
 /* ─────────── Misc ─────────── */
 
