@@ -731,6 +731,19 @@ function saveStacks(stacks) {
 }
 
 function renderStacks() {
+  if (!state.unlocked) {
+    el.stacksSave.classList.add('hidden');
+    el.stacksList.innerHTML = `
+      <div class="stacks-lock">
+        <div class="stacks-lock-icon">⭐</div>
+        <div class="stacks-lock-title">Сохранение цепочек — в Pro</div>
+        <div class="stacks-lock-text">Сохраняйте готовые конфигурации обмена со всеми кастомными курсами и комиссиями. Возвращайтесь к любимым одним тапом.</div>
+        <div class="stacks-lock-cta">Доступно в полной версии · <strong>100 ⭐</strong></div>
+      </div>
+    `;
+    return;
+  }
+  el.stacksSave.classList.remove('hidden');
   const stacks = loadStacks();
   if (!stacks.length) {
     el.stacksList.innerHTML = '<div class="stacks-empty">Пока ничего не сохранено.<br>Соберите цепочку — и сохраните её сюда, чтобы возвращаться одним тапом.</div>';
@@ -770,6 +783,7 @@ function escapeHtml(s) {
 }
 
 function saveCurrentStack() {
+  if (!state.unlocked) { showToast('Доступно в полной версии'); return; }
   const defaultName = [state.from, ...state.steps.map(s => s.to)].join('→');
   const name = (prompt('Назовите цепочку:', defaultName) || '').trim();
   if (!name) return;

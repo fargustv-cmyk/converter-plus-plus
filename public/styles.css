@@ -992,6 +992,37 @@ footer {
   color: var(--hint);
   font-size: 13px;
 }
+.stacks-lock {
+  text-align: center;
+  padding: 32px 20px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 6%, var(--section-bg)), color-mix(in srgb, var(--custom) 6%, var(--section-bg)));
+  border: 1px solid var(--border);
+  border-radius: 18px;
+}
+.stacks-lock-icon { font-size: 36px; margin-bottom: 8px; }
+.stacks-lock-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text);
+  margin-bottom: 8px;
+  letter-spacing: -0.2px;
+}
+.stacks-lock-text {
+  font-size: 13px;
+  color: var(--hint);
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+.stacks-lock-cta {
+  display: inline-block;
+  padding: 8px 14px;
+  background: var(--secondary-bg);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+}
+.stacks-lock-cta strong { font-weight: 800; }
 
 /* ─────────── Misc ─────────── */
 
