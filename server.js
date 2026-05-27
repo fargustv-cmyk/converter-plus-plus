@@ -271,6 +271,53 @@ app.post(webhookPath, async (req, res) => {
     }
   }
 
+  const text = update.message?.text?.trim();
+  const chatId = update.message?.chat?.id;
+  if (chatId && text && (text === '/start' || text.startsWith('/start '))) {
+    try {
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text:
+            'привет!\n\n' +
+            'Converter++ — конвертер валют и крипты с цепочками.\n' +
+            'Базовое — бесплатно. Свой курс и комиссия на каждой ступени — в Pro (100 ⭐, разово).\n\n' +
+            'жми кнопку ниже.',
+          reply_markup: {
+            inline_keyboard: [[{ text: 'открыть конвертер', web_app: { url: 'https://converter.technology' } }]]
+          }
+        })
+      });
+    } catch (err) {
+      console.error('/start sendMessage failed:', err);
+    }
+  }
+
+  if (chatId && text === '/pro') {
+    try {
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text:
+            'Pro за 100 ⭐ — разово, навсегда:\n' +
+            '• свой курс на каждой ступени\n' +
+            '• комиссии (%, абсолют)\n' +
+            '• сохранение цепочек\n\n' +
+            'открой приложение и нажми «разблокировать Pro».',
+          reply_markup: {
+            inline_keyboard: [[{ text: 'открыть', web_app: { url: 'https://converter.technology' } }]]
+          }
+        })
+      });
+    } catch (err) {
+      console.error('/pro sendMessage failed:', err);
+    }
+  }
+
   const payment = update.message?.successful_payment;
   if (payment && payment.invoice_payload?.startsWith('unlock:')) {
     const userId = update.message.from?.id;
