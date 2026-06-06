@@ -48,6 +48,13 @@ const PARTNER_KEY = 'partner_users';
 // Заполняется на каждое /command в чате и на /api/heartbeat из Mini App.
 // /stats и /users читают эту таблицу.
 const USERS_KEY   = 'users_seen';
+// Партнёрская программа: подача заявок.
+// applications_open: '1' | '0' (string, чтобы Upstash REST не путал тип)
+// applications_list[userId] = JSON({user_id, name, username, social, about,
+//   applied_at, status: 'pending'|'accepted'|'rejected', decided_at?, reason?})
+const APPS_OPEN_KEY = 'applications_open';
+const APPS_LIST_KEY = 'applications_list';
+const APPS_REJECT_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;  // 30 дней
 
 const paidUsers      = new Set();
 const chargesByUser  = new Map();  // userId(Number) → charge_id(String)
@@ -55,6 +62,8 @@ const partnerUsers   = new Set();  // userId(Number) — комп-доступ
 // In-memory fallback для аналитики если Redis недоступен (dev/no-creds).
 // Production всегда использует Redis hash USERS_KEY.
 const inMemoryUsers  = new Map();  // userId(Number) → {first_seen, last_seen, name, username}
+const inMemoryApps   = new Map();  // userId(Number) → application object
+let   applicationsOpen = false;    // загружается из Redis на boot
 
 async function loadPaidUsers() {
   if (!redis) return;
@@ -110,6 +119,58 @@ async function trackUser(userId, name, username) {
     await redis.hset(USERS_KEY, { [String(id)]: JSON.stringify(row) });
   } catch (err) {
     console.error('trackUser fail:', err);
+  }
+}
+
+// Helpers партнёрки.
+async function loadApplicationsState() {
+  if (!redis) return;
+  try {
+    const flag = await redis.get(APPS_OPEN_KEY);
+    applicationsOpen = String(flag) === '1';
+    console.log(`Applications: ${applicationsOpen ? 'OPEN' : 'closed'}`);
+  } catch (err) {
+    console.error('loadApplicationsState fail:', err);
+  }
+}
+async function setApplicationsOpen(open) {
+  applicationsOpen = !!open;
+  if (!redis) return;
+  try { await redis.set(APPS_OPEN_KEY, open ? '1' : '0'); }
+  catch (err) { console.error('setApplicationsOpen persist fail:', err); }
+}
+async function getApplication(userId) {
+  if (!redis) return inMemoryApps.get(userId) || null;
+  try {
+    const v = await redis.hget(APPS_LIST_KEY, String(userId));
+    if (!v) return null;
+    return typeof v === 'string' ? JSON.parse(v) : v;
+  } catch (err) {
+    console.error('getApplication fail:', err);
+    return null;
+  }
+}
+async function upsertApplication(userId, app) {
+  if (!redis) { inMemoryApps.set(userId, app); return; }
+  try { await redis.hset(APPS_LIST_KEY, { [String(userId)]: JSON.stringify(app) }); }
+  catch (err) { console.error('upsertApplication fail:', err); }
+}
+async function loadAllApplications() {
+  if (!redis) return [...inMemoryApps.values()];
+  try {
+    const all = await redis.hgetall(APPS_LIST_KEY);
+    if (!all) return [];
+    const arr = [];
+    for (const [, val] of Object.entries(all)) {
+      try {
+        const v = typeof val === 'string' ? JSON.parse(val) : val;
+        arr.push(v);
+      } catch {}
+    }
+    return arr;
+  } catch (err) {
+    console.error('loadAllApplications fail:', err);
+    return [];
   }
 }
 
@@ -345,6 +406,82 @@ app.post('/api/me', (req, res) => {
   });
 });
 
+// ── Партнёрская программа ─────────────────────────────────────────────────
+
+// Статус для UI: показывать ли «Стать партнёром» и в каком состоянии.
+app.post('/api/partner/status', async (req, res) => {
+  const user = verifyInitData(req.body?.initData);
+  if (!user) return res.json({ open: false, applied: null, is_partner: false });
+  const app = await getApplication(user.id);
+  res.json({
+    open:        applicationsOpen,
+    is_partner:  partnerUsers.has(user.id) || PRO_USER_IDS.has(user.id),
+    applied:     app ? { status: app.status, applied_at: app.applied_at, reason: app.reason || '' } : null,
+  });
+});
+
+// Подача заявки. Проверки: open, не уже partner/admin, без pending,
+// после reject — cooldown 30 дней.
+app.post('/api/partner/apply', async (req, res) => {
+  const user = verifyInitData(req.body?.initData);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!applicationsOpen) return res.status(403).json({ error: 'Приём заявок закрыт' });
+  if (PRO_USER_IDS.has(user.id) || partnerUsers.has(user.id)) {
+    return res.status(400).json({ error: 'У тебя уже есть партнёрский/admin доступ' });
+  }
+  const social = String(req.body?.social || '').trim().slice(0, 500);
+  const about  = String(req.body?.about  || '').trim().slice(0, 1000);
+  if (social.length < 3) return res.status(400).json({ error: 'Укажи ссылки на соцсети' });
+  if (about.length  < 20) return res.status(400).json({ error: 'Расскажи о себе хотя бы парой предложений (от 20 символов)' });
+
+  const existing = await getApplication(user.id);
+  if (existing?.status === 'pending') {
+    return res.status(409).json({ error: 'Заявка уже на рассмотрении' });
+  }
+  if (existing?.status === 'accepted') {
+    return res.status(409).json({ error: 'Ты уже партнёр' });
+  }
+  if (existing?.status === 'rejected') {
+    const elapsed = Date.now() - Number(existing.decided_at || existing.applied_at || 0);
+    if (elapsed < APPS_REJECT_COOLDOWN_MS) {
+      const daysLeft = Math.ceil((APPS_REJECT_COOLDOWN_MS - elapsed) / (24 * 60 * 60 * 1000));
+      return res.status(429).json({ error: `Подача снова через ${daysLeft} дн` });
+    }
+  }
+
+  const app = {
+    user_id:    user.id,
+    name:       user.first_name || '',
+    username:   user.username   || '',
+    social,
+    about,
+    applied_at: Date.now(),
+    status:     'pending',
+  };
+  await upsertApplication(user.id, app);
+
+  // Уведомить admin'ов в DM (best-effort).
+  if (BOT_TOKEN) {
+    const adminMsg =
+      '<b>Новая заявка на партнёрство</b>\n\n' +
+      `От: ${app.username ? '@' + escapeHtml(app.username) : escapeHtml(app.name)} <code>${app.user_id}</code>\n` +
+      `Соцсети: ${escapeHtml(social)}\n\n` +
+      `О себе: ${escapeHtml(about)}\n\n` +
+      `<i>/apps_accept ${app.user_id}</i> или <i>/apps_reject ${app.user_id} причина</i>`;
+    for (const adminId of PRO_USER_IDS) {
+      try {
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: adminId, text: adminMsg, parse_mode: 'HTML', disable_web_page_preview: true })
+        });
+      } catch {}
+    }
+  }
+
+  res.json({ ok: true });
+});
+
 app.post('/api/create-invoice', async (req, res) => {
   if (!BOT_TOKEN) {
     return res.status(400).json({ error: 'BOT_TOKEN не настроен — Stars-платежи недоступны' });
@@ -463,7 +600,13 @@ const ADMIN_HELP_TEXT =
   '/revoke &lt;user_id&gt; — забрать партнёрский Pro\n' +
   '/partners — список партнёров\n' +
   '/stats — аналитика пользователей\n' +
-  '/users — последние активные';
+  '/users — последние активные\n' +
+  '\n<b>Заявки на партнёрство:</b>\n' +
+  '/apps_open — открыть приём заявок\n' +
+  '/apps_close — закрыть\n' +
+  '/apps — список pending\n' +
+  '/apps_accept &lt;user_id&gt; — принять + grant Pro\n' +
+  '/apps_reject &lt;user_id&gt; [причина] — отклонить';
 
 // Escape для HTML parse_mode — name/username юзеров могут содержать <>&.
 function escapeHtml(s) {
@@ -633,6 +776,86 @@ app.post(webhookPath, async (req, res) => {
         ? '✓ <b>Pro активна.</b> Свой курс, комиссии и сохранение цепочек — доступны.'
         : 'Сейчас активна <b>бесплатная версия</b>. /pro чтобы разблокировать всё за 100 ⭐.';
       await sendChat(chatId, msg);
+    } else if (
+      cmd === '/apps_open' || cmd === '/apps_close' || cmd === '/apps' ||
+      cmd === '/apps_accept' || cmd === '/apps_reject'
+    ) {
+      if (!isAdmin(fromId)) {
+        // ignore
+      } else if (cmd === '/apps_open') {
+        await setApplicationsOpen(true);
+        await sendChat(chatId, '✓ Приём заявок на партнёрство <b>открыт</b>. Юзеры увидят форму в Mini App.', false);
+      } else if (cmd === '/apps_close') {
+        await setApplicationsOpen(false);
+        await sendChat(chatId, '✓ Приём заявок <b>закрыт</b>. Уже отправленные pending остались — их можно accept/reject.', false);
+      } else if (cmd === '/apps') {
+        const all = await loadAllApplications();
+        const pending = all.filter(a => a.status === 'pending').sort((a, b) => (b.applied_at ?? 0) - (a.applied_at ?? 0));
+        if (pending.length === 0) {
+          await sendChat(chatId, `Pending заявок нет.\n\nСтатус приёма: <b>${applicationsOpen ? 'открыт' : 'закрыт'}</b>`, false);
+        } else {
+          const head = `<b>Pending: ${pending.length}</b> (статус приёма: ${applicationsOpen ? 'открыт' : 'закрыт'})\n`;
+          const rows = pending.slice(0, 15).map(a => {
+            const handle = a.username ? '@' + escapeHtml(a.username) : escapeHtml(a.name || String(a.user_id));
+            return `\n— ${handle} <code>${a.user_id}</code> · ${relTime(a.applied_at)}\n` +
+                   `  Соцсети: ${escapeHtml(a.social)}\n` +
+                   `  О себе: ${escapeHtml(a.about.slice(0, 180))}${a.about.length > 180 ? '…' : ''}\n` +
+                   `  <i>/apps_accept ${a.user_id}</i>  <i>/apps_reject ${a.user_id}</i>`;
+          }).join('\n');
+          const tail = pending.length > 15 ? `\n\n…и ещё ${pending.length - 15}` : '';
+          await sendChat(chatId, head + rows + tail, false);
+        }
+      } else if (cmd === '/apps_accept') {
+        const args = text.slice(cmd.length).trim().split(/\s+/);
+        const targetId = Number(args[0]);
+        if (!Number.isFinite(targetId) || targetId <= 0) {
+          await sendChat(chatId, 'Формат: <code>/apps_accept &lt;user_id&gt;</code>', false);
+        } else {
+          const app = await getApplication(targetId);
+          if (!app) {
+            await sendChat(chatId, `Заявки от <code>${targetId}</code> нет.`, false);
+          } else if (app.status === 'accepted') {
+            await sendChat(chatId, `<code>${targetId}</code> уже принят.`, false);
+          } else {
+            app.status      = 'accepted';
+            app.decided_at  = Date.now();
+            app.decided_by  = fromId;
+            await upsertApplication(targetId, app);
+            await addPartnerUser(targetId);
+            console.log(`Application accepted: ${targetId} by admin ${fromId}`);
+            await sendChat(chatId, `✓ Заявка <code>${targetId}</code> принята, partner Pro выдан.`, false);
+            try {
+              await sendChat(targetId, '🎉 <b>Твоя заявка на партнёрство принята!</b>\n\nПартнёрский Pro уже активен — открой Mini App и пользуйся всеми возможностями.');
+            } catch {}
+          }
+        }
+      } else if (cmd === '/apps_reject') {
+        const args = text.slice(cmd.length).trim().split(/\s+/);
+        const targetId = Number(args[0]);
+        const reason   = args.slice(1).join(' ').slice(0, 200);
+        if (!Number.isFinite(targetId) || targetId <= 0) {
+          await sendChat(chatId, 'Формат: <code>/apps_reject &lt;user_id&gt; [причина]</code>', false);
+        } else {
+          const app = await getApplication(targetId);
+          if (!app) {
+            await sendChat(chatId, `Заявки от <code>${targetId}</code> нет.`, false);
+          } else {
+            app.status      = 'rejected';
+            app.decided_at  = Date.now();
+            app.decided_by  = fromId;
+            app.reason      = reason;
+            await upsertApplication(targetId, app);
+            console.log(`Application rejected: ${targetId} by admin ${fromId} (${reason || 'no reason'})`);
+            await sendChat(chatId, `✓ Заявка <code>${targetId}</code> отклонена${reason ? ' · ' + escapeHtml(reason) : ''}.`, false);
+            try {
+              const userMsg = '😔 <b>Твоя заявка на партнёрство пока не подошла.</b>' +
+                              (reason ? `\n\nПричина: ${escapeHtml(reason)}` : '') +
+                              '\n\nМожно подать снова через 30 дней.';
+              await sendChat(targetId, userMsg);
+            } catch {}
+          }
+        }
+      }
     } else if (cmd === '/stats' || cmd === '/users') {
       // Admin-only аналитика. Молчим для не-админа, как и для других admin-команд.
       if (!isAdmin(fromId)) {
@@ -784,6 +1007,7 @@ app.post(webhookPath, async (req, res) => {
 });
 
 await loadPaidUsers();
+await loadApplicationsState();
 
 app.listen(PORT, () => {
   console.log(`Converter++ running on http://localhost:${PORT}`);

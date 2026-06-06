@@ -168,7 +168,18 @@ const el = {
   stacksClose: $('stacksClose'),
   stacksSave: $('stacksSave'),
   stacksList: $('stacksList'),
-  roundToggle: $('roundToggle')
+  roundToggle: $('roundToggle'),
+  // Партнёрская программа
+  partnerSection: $('partnerSection'),
+  partnerCta:     $('partnerCta'),
+  partnerTitle:   $('partnerTitle'),
+  partnerText:    $('partnerText'),
+  partnerSheet:   $('partnerSheet'),
+  partnerClose:   $('partnerClose'),
+  partnerCancel:  $('partnerCancel'),
+  partnerSubmit:  $('partnerSubmit'),
+  partnerSocial:  $('partnerSocial'),
+  partnerAbout:   $('partnerAbout'),
 };
 
 // ---------- utilities ----------
@@ -1000,7 +1011,109 @@ function applyUnlockUi() {
   el.proStatus.classList.toggle('unlocked', state.unlocked);
   if (el.brandPro) el.brandPro.classList.toggle('shown', state.unlocked);
   el.proSection.classList.toggle('unlocked', state.unlocked);
+  applyPartnerUi();  // unlocked мог поменяться (после accept admin'ом) — скрываем баннер
   render();
+}
+
+// ---------- partner program ----------
+
+const partnerState = { open: false, applied: null, is_partner: false };
+
+async function fetchPartnerStatus() {
+  // В браузере нет initData → нет смысла дёргать (всё равно ничего не покажем).
+  if (!isInTelegram()) { applyPartnerUi(); return; }
+  try {
+    const r = await fetch('/api/partner/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initData: tg.initData })
+    });
+    const data = await r.json();
+    partnerState.open       = !!data.open;
+    partnerState.applied    = data.applied || null;
+    partnerState.is_partner = !!data.is_partner;
+  } catch (err) {
+    console.error('fetchPartnerStatus', err);
+  }
+  applyPartnerUi();
+}
+
+function applyPartnerUi() {
+  // Видимость: только в Telegram, юзер ещё без Pro (paid тоже скрываем — он
+  // уже заплатил, нет смысла предлагать партнёрку), и (приём открыт ИЛИ есть
+  // pending/rejected статус — чтобы юзер видел итог свой заявки).
+  const inTg = isInTelegram();
+  const hasApplication = !!partnerState.applied;
+  const visible = inTg && !state.unlocked && (partnerState.open || hasApplication);
+  el.partnerSection.classList.toggle('hidden', !visible);
+  if (!visible) return;
+
+  // Состояния:
+  //  pending  — «Заявка на рассмотрении» (disable CTA)
+  //  rejected — «Отклонена · подать снова через N дн / Подать» если истёк cooldown
+  //  null + open — «Стать партнёром» / «Подать»
+  if (partnerState.applied?.status === 'pending') {
+    el.partnerTitle.textContent = 'Заявка на рассмотрении';
+    el.partnerText.textContent  = 'Мы посмотрим её в ближайшие дни и ответим в DM от бота.';
+    el.partnerCta.textContent   = '⏳';
+    el.partnerCta.disabled      = true;
+    el.partnerSection.classList.add('partner--waiting');
+    el.partnerSection.classList.remove('partner--rejected');
+  } else if (partnerState.applied?.status === 'rejected') {
+    el.partnerTitle.textContent = 'Заявка не подошла';
+    const reason = partnerState.applied.reason ? ` (${partnerState.applied.reason})` : '';
+    const days = Math.ceil(((30 * 24 * 60 * 60 * 1000) - (Date.now() - (partnerState.applied.applied_at || 0))) / (24 * 60 * 60 * 1000));
+    el.partnerText.textContent  = `Можно подать снова через ${Math.max(0, days)} дн${reason}.`;
+    el.partnerCta.textContent   = days <= 0 && partnerState.open ? 'Подать' : '—';
+    el.partnerCta.disabled      = !(days <= 0 && partnerState.open);
+    el.partnerSection.classList.add('partner--rejected');
+    el.partnerSection.classList.remove('partner--waiting');
+  } else {
+    el.partnerTitle.textContent = 'Стать партнёром';
+    el.partnerText.textContent  = 'Бесплатный Pro в обмен на упоминание у себя в соцсетях. Подай заявку — рассмотрим.';
+    el.partnerCta.textContent   = 'Подать';
+    el.partnerCta.disabled      = false;
+    el.partnerSection.classList.remove('partner--waiting', 'partner--rejected');
+  }
+}
+
+function openPartnerSheet() {
+  el.partnerSocial.value = '';
+  el.partnerAbout.value  = '';
+  openSheet(el.partnerSheet);
+}
+
+async function submitPartnerApplication() {
+  const social = el.partnerSocial.value.trim();
+  const about  = el.partnerAbout.value.trim();
+  if (social.length < 3)  { showToast('Укажи ссылки на соцсети'); return; }
+  if (about.length  < 20) { showToast('Расскажи о себе хотя бы парой предложений'); return; }
+
+  el.partnerSubmit.disabled = true;
+  const orig = el.partnerSubmit.textContent;
+  el.partnerSubmit.textContent = '…';
+  try {
+    const r = await fetch('/api/partner/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initData: tg.initData, social, about })
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      closeSheet(el.partnerSheet);
+      showToast('Заявка отправлена');
+      hapticNotif('success');
+      await fetchPartnerStatus();
+    } else {
+      showToast(data.error || 'Не удалось отправить');
+      hapticNotif('error');
+    }
+  } catch (err) {
+    showToast(err.message || 'Ошибка'); hapticNotif('error');
+  } finally {
+    el.partnerSubmit.disabled = false;
+    el.partnerSubmit.textContent = orig;
+  }
 }
 
 // ---------- top-level listeners ----------
@@ -1087,6 +1200,21 @@ el.buyPro.addEventListener('click', async () => {
   finally { el.buyPro.textContent = orig; }
 });
 
+// Партнёрская программа
+if (el.partnerCta) {
+  el.partnerCta.addEventListener('click', () => {
+    if (el.partnerCta.disabled) return;
+    haptic('light');
+    openPartnerSheet();
+  });
+}
+if (el.partnerClose)  el.partnerClose.addEventListener('click', () => closeSheet(el.partnerSheet));
+if (el.partnerCancel) el.partnerCancel.addEventListener('click', () => closeSheet(el.partnerSheet));
+if (el.partnerSheet)  el.partnerSheet.addEventListener('click', e => {
+  if (e.target === el.partnerSheet) closeSheet(el.partnerSheet);
+});
+if (el.partnerSubmit) el.partnerSubmit.addEventListener('click', submitPartnerApplication);
+
 // ---------- init ----------
 
 (async () => {
@@ -1100,6 +1228,7 @@ el.buyPro.addEventListener('click', async () => {
     state.from = pickFallback(state.from);
     state.steps = state.steps.map(s => ({ ...s, to: pickFallback(s.to) }));
     await checkUnlock();
+    fetchPartnerStatus();  // fire-and-forget — UI отрисуется когда придёт ответ
     render();
   } catch (err) {
     console.error(err);

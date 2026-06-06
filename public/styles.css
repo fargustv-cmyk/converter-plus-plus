@@ -556,6 +556,111 @@ header .subtitle {
 .pro-btn:active { transform: scale(0.96); }
 .pro-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ─────────── Partner card ─────────── */
+/* Тот же layout что и .pro-card, но без градиента и в spam-нейтральном тоне.
+   Скрывается через .hidden (display:none) когда applyPartnerUi решает не показывать. */
+.partner {
+  margin-bottom: 16px;
+}
+.partner.hidden { display: none; }
+.partner-card {
+  background: var(--section-bg);
+  border: 1px dashed var(--border-strong);
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.partner-icon {
+  font-size: 22px;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  background: var(--bg);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+}
+.partner-body { flex: 1; min-width: 0; }
+.partner-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.partner-text {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--hint);
+  line-height: 1.35;
+}
+.partner-btn {
+  flex: 0 0 auto;
+  background: transparent;
+  color: var(--text);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.partner-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.partner-btn:active:not(:disabled) { transform: scale(0.96); }
+.partner-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.partner--waiting  .partner-icon { color: var(--hint); }
+.partner--rejected .partner-icon { color: var(--hint); }
+
+/* Партнёрская форма в sheet */
+.partner-form {
+  padding: 4px 4px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.partner-form-lead {
+  font-size: 13px;
+  color: var(--hint);
+  line-height: 1.45;
+  margin: 0;
+}
+.partner-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.partner-field > span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.partner-field textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  resize: vertical;
+  min-height: 60px;
+}
+.partner-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.partner-form-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
 /* ─────────── Footer ─────────── */
 
 footer {
