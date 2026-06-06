@@ -8,6 +8,29 @@ if (tg) {
 const haptic = (k = 'light') => { try { tg?.HapticFeedback?.impactOccurred?.(k); } catch {} };
 const hapticNotif = (k) => { try { tg?.HapticFeedback?.notificationOccurred?.(k); } catch {} };
 
+// Запущены ли мы внутри Telegram (mini app) или в обычном браузере (на сайте).
+// В браузере initData пустая — Stars-платежи и Pro-функции работать не могут.
+const BOT_LINK = 'https://t.me/personal_converter_bot';
+function isInTelegram() {
+  return !!(tg && tg.initData);
+}
+
+// Юзер на сайте кликнул что-то платное → отправляем в бот (там menu-button
+// открывает Mini App, где есть Stars-инвойсы). reason — для будущей
+// телеметрии или подмены текста toast'а.
+function gotoTelegramMiniApp(reason) {
+  const messages = {
+    pro:    'Покупка Pro доступна в Telegram — открываю бота',
+    save:   'Сохранение цепочек в Telegram — открываю бота',
+    editor: 'Свой курс и комиссии в Telegram — открываю бота',
+  };
+  showToast(messages[reason] || 'Открой в Telegram, чтобы продолжить');
+  // setTimeout даёт toast'у показаться до того как браузер открывает новую вкладку
+  // (некоторые блокировщики позволяют new tab только в gesture handler — здесь юзер
+  // только что кликнул, в окно gesture'а попадаем).
+  try { window.open(BOT_LINK, '_blank', 'noopener,noreferrer'); } catch {}
+}
+
 const STORAGE_KEY = 'converter++:v4';
 const THEME_KEY = 'converter++:theme';
 const STACKS_KEY = 'converter++:stacks:v1';
@@ -116,6 +139,7 @@ const el = {
   chain: $('chain'),
   addStep: $('addStep'),
   reverseChain: $('reverseChain'),
+  shareChain: $('shareChain'),
   summary: $('summary'),
   buyPro: $('buyPro'),
   proSection: $('proSection'),
@@ -230,6 +254,72 @@ function saveState() {
       source: state.source, from: state.from, steps: state.steps, anchor: state.anchor
     }));
   } catch {}
+}
+
+// Share-link: web URL вида ?c=USD-EUR-BTC&a=100&s=cbr.
+// Открытие через Telegram t.me link с startapp=USD-EUR-BTC__100__cbr — тоже
+// поддерживается, парсится из tg.initDataUnsafe.start_param.
+// Параметр forTelegram: если true — возвращаем t.me link, который у получателя
+// откроет mini app сразу (внутри Telegram); если false — web URL для браузера.
+function buildShareUrl(forTelegram = false) {
+  const chain = [state.from, ...state.steps.map(s => s.to)].filter(Boolean).join('-');
+  const amount = state?.anchor?.amount;
+  if (forTelegram) {
+    const amt = (Number.isFinite(amount) && amount > 0) ? String(amount) : '';
+    // startapp param ограничен [A-Za-z0-9_-], максимум 64 chars — пакуем '__' как разделитель.
+    const startApp = [chain, amt, state.source].join('__');
+    return `${BOT_LINK}?startapp=${startApp}`;
+  }
+  const params = new URLSearchParams();
+  params.set('c', chain);
+  if (Number.isFinite(amount) && amount > 0) params.set('a', String(amount));
+  params.set('s', state.source);
+  return `${location.origin}/?${params.toString()}`;
+}
+
+// Возвращает true если из URL/start_param удалось разобрать цепочку
+// (тогда loadState() из localStorage НЕ должен этот state перезаписать).
+function hydrateFromShare() {
+  let c = null, a = null, s = null;
+  const params = new URLSearchParams(location.search);
+  c = params.get('c'); a = params.get('a'); s = params.get('s');
+  // start_param формат: chain__amount__source (амп/равно запрещены в Telegram startapp)
+  if (!c && tg?.initDataUnsafe?.start_param) {
+    const parts = String(tg.initDataUnsafe.start_param).split('__');
+    c = parts[0] || null; a = parts[1] || null; s = parts[2] || null;
+  }
+  if (!c) return false;
+  const codes = c.split('-').map(x => x.trim().toUpperCase()).filter(Boolean);
+  if (codes.length < 2) return false;
+  state.from = codes[0];
+  state.steps = codes.slice(1).map(to => ({ to, fee: 0, customRate: null }));
+  const amount = Number(a);
+  if (Number.isFinite(amount) && amount > 0) state.anchor = { index: 0, amount };
+  if (s === 'cbr' || s === 'open') state.source = s;
+  return true;
+}
+
+async function shareChain() {
+  // В Telegram отдаём t.me link — у получателя сразу откроется mini app.
+  // В браузере отдаём web URL — открывается на converter.technology с автозаполнением.
+  const url = buildShareUrl(isInTelegram());
+  // 1. В Telegram — родной share-диалог через openTelegramLink.
+  if (isInTelegram() && tg?.openTelegramLink) {
+    try {
+      const text = 'Цепочка конвертации в Converter++';
+      tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`);
+      return;
+    } catch {}
+  }
+  // 2. Браузер — clipboard.
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast('Ссылка скопирована');
+    hapticNotif('success');
+    return;
+  } catch { /* clipboard может быть запрещён в iOS WebView без HTTPS-gesture */ }
+  // 3. Фолбэк — prompt(), пусть юзер скопирует руками.
+  prompt('Скопируйте ссылку:', url);
 }
 
 function loadState() {
@@ -649,6 +739,9 @@ for (const tab of el.pickerTabs.querySelectorAll('.picker-tab')) {
 // ---------- rate / fee editor ----------
 
 function openRateSheet(stepIndex, mode = 'rate') {
+  // Браузер-юзер без Pro кликнул свой курс / комиссию → редирект в бот,
+  // где есть Mini App с возможностью купить Pro (Stars в браузере недоступны).
+  if (!state.unlocked && !isInTelegram()) { gotoTelegramMiniApp('editor'); return; }
   state.editing = stepIndex;
   state.editingMode = mode;
   const step = state.steps[stepIndex];
@@ -805,7 +898,11 @@ function escapeHtml(s) {
 }
 
 function saveCurrentStack() {
-  if (!state.unlocked) { showToast('Доступно в полной версии'); return; }
+  if (!state.unlocked) {
+    if (!isInTelegram()) { gotoTelegramMiniApp('save'); return; }
+    showToast('Доступно в полной версии');
+    return;
+  }
   const defaultName = [state.from, ...state.steps.map(s => s.to)].join('→');
   const name = (prompt('Назовите цепочку:', defaultName) || '').trim();
   if (!name) return;
@@ -870,7 +967,7 @@ async function checkUnlock() {
 }
 
 async function triggerBuyPro(btnEl) {
-  if (!tg || !tg.initData) { showToast('Платёж доступен только в Telegram'); return; }
+  if (!isInTelegram()) { gotoTelegramMiniApp('pro'); return; }
   if (btnEl) btnEl.disabled = true;
   try {
     const r = await fetch('/api/create-invoice', {
@@ -950,6 +1047,8 @@ el.reverseChain.addEventListener('click', () => {
   render();
 });
 
+el.shareChain.addEventListener('click', () => { haptic('light'); shareChain(); });
+
 for (const tab of el.sourceTabs) {
   tab.addEventListener('click', async () => {
     if (tab.dataset.source === state.source) return;
@@ -992,6 +1091,9 @@ el.buyPro.addEventListener('click', async () => {
 
 (async () => {
   loadState();
+  // Share-link / startapp param «выигрывает» у localStorage: юзер открыл
+  // именно эту ссылку — значит ему интересна цепочка из ссылки, не его старая.
+  hydrateFromShare();
   applyRoundUi();
   try {
     await loadRates(state.source);
