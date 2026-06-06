@@ -44,10 +44,17 @@ const CHARGES_KEY = 'charges_by_user';
 // но Pro есть. Отдельный set, чтобы не путать с paid (нельзя рефандить
 // то, что не платили) и не путать с PRO_USER_IDS (env, hard-coded admin).
 const PARTNER_KEY = 'partner_users';
+// Аналитика: HSET users_seen[<userId>] = JSON({first_seen, last_seen, name, username}).
+// Заполняется на каждое /command в чате и на /api/heartbeat из Mini App.
+// /stats и /users читают эту таблицу.
+const USERS_KEY   = 'users_seen';
 
 const paidUsers      = new Set();
 const chargesByUser  = new Map();  // userId(Number) → charge_id(String)
 const partnerUsers   = new Set();  // userId(Number) — комп-доступ
+// In-memory fallback для аналитики если Redis недоступен (dev/no-creds).
+// Production всегда использует Redis hash USERS_KEY.
+const inMemoryUsers  = new Map();  // userId(Number) → {first_seen, last_seen, name, username}
 
 async function loadPaidUsers() {
   if (!redis) return;
@@ -70,6 +77,60 @@ async function loadPaidUsers() {
     console.log(`Loaded ${paidUsers.size} paid, ${partnerUsers.size} partner, ${chargesByUser.size} charge(s) from Redis`);
   } catch (err) {
     console.error('Failed to load paid users from Redis:', err);
+  }
+}
+
+// Track активности юзера: upsert в users_seen. Идемпотентно — старый
+// first_seen не перетирается. name/username обновляются если непустые.
+async function trackUser(userId, name, username) {
+  if (!userId || !Number.isFinite(Number(userId))) return;
+  const id  = Number(userId);
+  const now = Date.now();
+  if (!redis) {
+    const cur = inMemoryUsers.get(id);
+    inMemoryUsers.set(id, {
+      first_seen: cur?.first_seen ?? now,
+      last_seen:  now,
+      name:       name     || cur?.name     || '',
+      username:   username || cur?.username || '',
+    });
+    return;
+  }
+  try {
+    const existing = await redis.hget(USERS_KEY, String(id));
+    let row;
+    if (existing) {
+      const cur = typeof existing === 'string' ? JSON.parse(existing) : existing;
+      row = { ...cur, last_seen: now };
+      if (name)     row.name     = name;
+      if (username) row.username = username;
+    } else {
+      row = { first_seen: now, last_seen: now, name: name || '', username: username || '' };
+    }
+    await redis.hset(USERS_KEY, { [String(id)]: JSON.stringify(row) });
+  } catch (err) {
+    console.error('trackUser fail:', err);
+  }
+}
+
+async function loadAllUsers() {
+  if (!redis) {
+    return [...inMemoryUsers.entries()].map(([id, v]) => ({ id, ...v }));
+  }
+  try {
+    const all = await redis.hgetall(USERS_KEY);
+    if (!all) return [];
+    const arr = [];
+    for (const [uid, val] of Object.entries(all)) {
+      try {
+        const v = typeof val === 'string' ? JSON.parse(val) : val;
+        arr.push({ id: Number(uid), ...v });
+      } catch {}
+    }
+    return arr;
+  } catch (err) {
+    console.error('loadAllUsers fail:', err);
+    return [];
   }
 }
 
@@ -275,6 +336,9 @@ function verifyInitData(initData) {
 app.post('/api/me', (req, res) => {
   const user = verifyInitData(req.body?.initData);
   if (!user) return res.json({ unlocked: false });
+  // Track активность — каждое открытие Mini App обновит last_seen.
+  // Не блокируем response: fire-and-forget.
+  trackUser(user.id, user.first_name || '', user.username || '').catch(() => {});
   res.json({
     unlocked: isUnlocked(user.id),
     user: { id: user.id, first_name: user.first_name }
@@ -397,7 +461,32 @@ const ADMIN_HELP_TEXT =
   '\n\n<b>Админ:</b>\n' +
   '/grant &lt;user_id&gt; [метка] — выдать партнёрский Pro\n' +
   '/revoke &lt;user_id&gt; — забрать партнёрский Pro\n' +
-  '/partners — список партнёров';
+  '/partners — список партнёров\n' +
+  '/stats — аналитика пользователей\n' +
+  '/users — последние активные';
+
+// Escape для HTML parse_mode — name/username юзеров могут содержать <>&.
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Человеко-читаемое «X назад» для last_seen.
+function relTime(ms) {
+  if (!ms) return '?';
+  const diff = Date.now() - Number(ms);
+  if (diff < 0) return 'только что';
+  const s = Math.floor(diff / 1000);
+  if (s < 60)         return `${s} с назад`;
+  const m = Math.floor(s / 60);
+  if (m < 60)         return `${m} мин назад`;
+  const h = Math.floor(m / 60);
+  if (h < 24)         return `${h} ч назад`;
+  const d = Math.floor(h / 24);
+  if (d < 7)          return `${d} дн назад`;
+  if (d < 30)         return `${Math.floor(d / 7)} нед назад`;
+  return `${Math.floor(d / 30)} мес назад`;
+}
 
 const REFUND_OK_TEXT =
   '✓ <b>Возврат выполнен.</b> Stars вернутся на твой баланс в Telegram. ' +
@@ -505,6 +594,12 @@ app.post(webhookPath, async (req, res) => {
   const text   = update.message?.text?.trim();
   const chatId = update.message?.chat?.id;
   const fromId = update.message?.from?.id;
+  const fromName     = update.message?.from?.first_name || '';
+  const fromUsername = update.message?.from?.username   || '';
+
+  // Любое сообщение от юзера → upsert аналитики. Это даст /stats и /users
+  // понимание «кто и когда заходил в бота».
+  if (fromId) trackUser(fromId, fromName, fromUsername).catch(() => {});
 
   if (chatId && text) {
     // Сравниваем основу команды (отбрасываем @bot_name suffix и аргументы).
@@ -538,6 +633,59 @@ app.post(webhookPath, async (req, res) => {
         ? '✓ <b>Pro активна.</b> Свой курс, комиссии и сохранение цепочек — доступны.'
         : 'Сейчас активна <b>бесплатная версия</b>. /pro чтобы разблокировать всё за 100 ⭐.';
       await sendChat(chatId, msg);
+    } else if (cmd === '/stats' || cmd === '/users') {
+      // Admin-only аналитика. Молчим для не-админа, как и для других admin-команд.
+      if (!isAdmin(fromId)) {
+        // ignore
+      } else if (cmd === '/stats') {
+        const users = await loadAllUsers();
+        const now = Date.now();
+        const DAY = 24 * 60 * 60 * 1000;
+        const startOfToday = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+        const total       = users.length;
+        const activeToday = users.filter(u => (u.last_seen ?? 0) >= startOfToday).length;
+        const active7d    = users.filter(u => now - (u.last_seen ?? 0) < 7 * DAY).length;
+        const active30d   = users.filter(u => now - (u.last_seen ?? 0) < 30 * DAY).length;
+        const newToday    = users.filter(u => (u.first_seen ?? 0) >= startOfToday).length;
+        const admins      = PRO_USER_IDS.size;
+        const paid        = paidUsers.size;
+        const partners    = partnerUsers.size;
+        const free        = Math.max(0, total - admins - paid - partners);
+        const msg =
+          '<b>Статистика Converter++</b>\n\n' +
+          `Всего юзеров: <b>${total}</b>\n` +
+          `Сегодня заходили: <b>${activeToday}</b>\n` +
+          `За 7 дней: <b>${active7d}</b>\n` +
+          `За 30 дней: <b>${active30d}</b>\n` +
+          `Новых сегодня: <b>${newToday}</b>\n\n` +
+          `<b>Доступ:</b>\n` +
+          `• admin (env): ${admins}\n` +
+          `• paid: ${paid}\n` +
+          `• partner: ${partners}\n` +
+          `• free: ${free}`;
+        await sendChat(chatId, msg, false);
+      } else if (cmd === '/users') {
+        const users = await loadAllUsers();
+        if (users.length === 0) {
+          await sendChat(chatId, 'Пока нет ни одного юзера в трекинге.', false);
+        } else {
+          users.sort((a, b) => (b.last_seen ?? 0) - (a.last_seen ?? 0));
+          const top = users.slice(0, 20);
+          const rows = top.map(u => {
+            const role =
+              PRO_USER_IDS.has(u.id) ? 'admin'  :
+              partnerUsers.has(u.id) ? 'partner':
+              paidUsers.has(u.id)    ? 'paid'   : 'free';
+            const handle = u.username
+              ? `@${escapeHtml(u.username)}`
+              : (u.name ? escapeHtml(u.name) : `<code>${u.id}</code>`);
+            const idTag = u.username || u.name ? ` <code>${u.id}</code>` : '';
+            return `• ${handle}${idTag} · ${role} · ${relTime(u.last_seen)}`;
+          }).join('\n');
+          const head = `<b>Последние ${top.length} активных из ${users.length}</b>`;
+          await sendChat(chatId, `${head}\n${rows}`, false);
+        }
+      }
     } else if (cmd === '/grant' || cmd === '/revoke' || cmd === '/partners') {
       // Admin-only команды для управления партнёрским доступом.
       if (!isAdmin(fromId)) {
