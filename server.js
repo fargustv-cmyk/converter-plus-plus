@@ -255,6 +255,104 @@ app.post('/api/create-invoice', async (req, res) => {
   }
 });
 
+// Универсальный sendMessage с inline-кнопкой «открыть» (web_app).
+// Используется во всех текстовых ответах на команды.
+async function sendChat(chatId, text, withOpenButton = true) {
+  const body = { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true };
+  if (withOpenButton) {
+    body.reply_markup = {
+      inline_keyboard: [[{ text: 'открыть', web_app: { url: 'https://converter.technology' } }]]
+    };
+  }
+  try {
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch (err) {
+    console.error('sendMessage failed:', err);
+  }
+}
+
+// Сводка топ-курсов для команды /rates. Берёт CBR (фиат, RUB-база) + open
+// (USD-база, есть крипта). Цены округляем для читабельности.
+async function buildRatesSummary() {
+  const lines = [];
+  try {
+    const cached = ratesCache.get('cbr');
+    let cbr = cached && Date.now() - cached.at < RATES_TTL_MS ? cached.data : null;
+    if (!cbr) {
+      cbr = await fetchCbrRates();
+      ratesCache.set('cbr', { data: cbr, at: Date.now() });
+    }
+    const fiat = ['USD', 'EUR', 'CNY', 'GBP', 'JPY'];
+    lines.push('<b>ЦБ РФ</b> · ' + (cbr.date || ''));
+    for (const code of fiat) {
+      const r = cbr.rates[code];
+      if (!r) continue;
+      lines.push(`  ${code}  ${r.value.toFixed(2)} ₽`);
+    }
+  } catch (err) {
+    console.error('/rates CBR fail:', err);
+    lines.push('ЦБ РФ — не получилось загрузить.');
+  }
+  try {
+    const cached = ratesCache.get('open');
+    let open = cached && Date.now() - cached.at < RATES_TTL_MS ? cached.data : null;
+    if (!open) {
+      open = await fetchOpenRates();
+      ratesCache.set('open', { data: open, at: Date.now() });
+    }
+    // В fetchOpenRates value = «сколько USD за 1 единицу». Перевернём для читабельности:
+    // BTC показываем «$ за 1 BTC» (т.е. value напрямую).
+    const crypto = ['BTC', 'ETH'];
+    lines.push('');
+    lines.push('<b>Крипта</b> · ' + (open.date || ''));
+    for (const code of crypto) {
+      const r = open.rates[code];
+      if (!r) continue;
+      lines.push(`  ${code}  $${r.value.toLocaleString('en-US', { maximumFractionDigits: 0 })}`);
+    }
+  } catch (err) {
+    console.error('/rates open fail:', err);
+  }
+  lines.push('');
+  lines.push('<i>Курсы кешируются час. Полная таблица и цепочки — в приложении.</i>');
+  return lines.join('\n');
+}
+
+const HELP_TEXT =
+  '<b>Converter++</b> — конвертер валют и крипты с цепочками.\n\n' +
+  'Команды:\n' +
+  '/start — открыть приложение\n' +
+  '/rates — топ курсов прямо в чат\n' +
+  '/sources — откуда берутся курсы\n' +
+  '/status — статус Pro у тебя\n' +
+  '/pro — что даёт Pro и как купить\n' +
+  '/help — это меню\n\n' +
+  '<i>Базовое бесплатно. Свой курс и комиссии на каждой ступени — Pro (100 ⭐, разово).</i>';
+
+const SOURCES_TEXT =
+  '<b>Откуда курсы</b>\n\n' +
+  '• <b>ЦБ РФ</b> — фиатные валюты (USD, EUR, CNY, GBP, JPY и др.), официальный XML cbr.ru. База — RUB.\n' +
+  '• <b>fawazahmed0/currency-api</b> — открытый источник для крипты (BTC, ETH и десятки других) и глобального фиата. База — USD.\n\n' +
+  'Кеш — 1 час. В приложении можно выбрать какой источник использовать.';
+
+const PRO_TEXT =
+  '<b>Pro</b> — 100 ⭐, разово, навсегда:\n' +
+  '• свой курс на каждой ступени\n' +
+  '• комиссии (%, абсолют)\n' +
+  '• сохранение цепочек\n\n' +
+  'Открой приложение и нажми «разблокировать Pro».';
+
+const START_TEXT =
+  'привет!\n\n' +
+  'Converter++ — цепочки конвертации валют и крипты. ' +
+  'Сколько USD → EUR → BTC у тебя получится — в один экран.\n\n' +
+  'Базовое бесплатно. Pro (100 ⭐, разово) даёт свой курс и комиссии на каждой ступени.\n\n' +
+  '/help — полный список команд';
+
 const webhookPath = BOT_TOKEN ? `/webhook/${BOT_TOKEN.split(':')[1] || 'tg'}` : '/webhook/disabled';
 app.post(webhookPath, async (req, res) => {
   const update = req.body || {};
@@ -271,50 +369,30 @@ app.post(webhookPath, async (req, res) => {
     }
   }
 
-  const text = update.message?.text?.trim();
+  const text   = update.message?.text?.trim();
   const chatId = update.message?.chat?.id;
-  if (chatId && text && (text === '/start' || text.startsWith('/start '))) {
-    try {
-      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text:
-            'привет!\n\n' +
-            'Converter++ — конвертер валют и крипты с цепочками.\n' +
-            'Базовое — бесплатно. Свой курс и комиссия на каждой ступени — в Pro (100 ⭐, разово).\n\n' +
-            'жми кнопку ниже.',
-          reply_markup: {
-            inline_keyboard: [[{ text: 'открыть конвертер', web_app: { url: 'https://converter.technology' } }]]
-          }
-        })
-      });
-    } catch (err) {
-      console.error('/start sendMessage failed:', err);
-    }
-  }
+  const fromId = update.message?.from?.id;
 
-  if (chatId && text === '/pro') {
-    try {
-      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text:
-            'Pro за 100 ⭐ — разово, навсегда:\n' +
-            '• свой курс на каждой ступени\n' +
-            '• комиссии (%, абсолют)\n' +
-            '• сохранение цепочек\n\n' +
-            'открой приложение и нажми «разблокировать Pro».',
-          reply_markup: {
-            inline_keyboard: [[{ text: 'открыть', web_app: { url: 'https://converter.technology' } }]]
-          }
-        })
-      });
-    } catch (err) {
-      console.error('/pro sendMessage failed:', err);
+  if (chatId && text) {
+    // Сравниваем основу команды (отбрасываем @bot_name suffix и аргументы).
+    const cmd = text.split(/\s+|@/, 1)[0];
+    if (cmd === '/start') {
+      await sendChat(chatId, START_TEXT);
+    } else if (cmd === '/help') {
+      await sendChat(chatId, HELP_TEXT, false);
+    } else if (cmd === '/pro') {
+      await sendChat(chatId, PRO_TEXT);
+    } else if (cmd === '/sources') {
+      await sendChat(chatId, SOURCES_TEXT, false);
+    } else if (cmd === '/rates') {
+      const summary = await buildRatesSummary();
+      await sendChat(chatId, summary, false);
+    } else if (cmd === '/status') {
+      const unlocked = fromId ? isUnlocked(fromId) : false;
+      const msg = unlocked
+        ? '✓ <b>Pro активна.</b> Свой курс, комиссии и сохранение цепочек — доступны.'
+        : 'Сейчас активна <b>бесплатная версия</b>. /pro чтобы разблокировать всё за 100 ⭐.';
+      await sendChat(chatId, msg);
     }
   }
 
@@ -327,6 +405,7 @@ app.post(webhookPath, async (req, res) => {
     if (userId && Number(payloadUserId) === userId) {
       await markUserPaid(userId);
       console.log(`Unlocked Pro for user ${userId} (${payment.total_amount} stars)`);
+      await sendChat(userId, '🎉 <b>Pro разблокирована, навсегда.</b> Открывай приложение и пользуйся.');
     } else {
       console.warn('Payment payload mismatch — ignoring', { payloadUserId, userId });
     }

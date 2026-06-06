@@ -33,8 +33,12 @@ await call('setMyDescription', {
 
 await call('setMyCommands', {
   commands: [
-    { command: 'start', description: 'открыть конвертер' },
-    { command: 'pro', description: 'разблокировать Pro за 100 ⭐' }
+    { command: 'start',   description: 'открыть конвертер' },
+    { command: 'rates',   description: 'топ курсов в чат' },
+    { command: 'sources', description: 'откуда берём курсы' },
+    { command: 'status',  description: 'статус Pro у тебя' },
+    { command: 'pro',     description: 'разблокировать Pro за 100 ⭐' },
+    { command: 'help',    description: 'список команд' }
   ]
 });
 
