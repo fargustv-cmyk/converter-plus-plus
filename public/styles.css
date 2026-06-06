@@ -454,6 +454,12 @@ header .subtitle {
   flex: 0 0 48px;
   padding: 12px 0;
   font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ghost.icon-only svg {
+  display: block;
 }
 
 /* ─────────── Summary ─────────── */

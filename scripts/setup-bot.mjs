@@ -1,9 +1,18 @@
-// Apply bot meta + menu button via Telegram Bot API.
+// Apply bot meta + menu button + webhook via Telegram Bot API.
 // Run: BOT_TOKEN=... node scripts/setup-bot.mjs
+//
+// Опционально:
+//   APP_URL=https://converter.technology  — куда смотрит menu_button и web_app
+//   WEBHOOK_SECRET=...                    — secret_token для setWebhook (если задан,
+//                                            наш server.js проверяет его на каждом update)
 
-const TOKEN = process.env.BOT_TOKEN;
-const URL = process.env.APP_URL || 'https://converter.technology';
+const TOKEN          = process.env.BOT_TOKEN;
+const URL            = process.env.APP_URL || 'https://converter.technology';
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 if (!TOKEN) { console.error('BOT_TOKEN env required'); process.exit(1); }
+// webhookPath ДОЛЖЕН совпадать с server.js — там тот же формат.
+const WEBHOOK_PATH = `/webhook/${TOKEN.split(':')[1] || 'tg'}`;
+const WEBHOOK_URL  = `${URL.replace(/\/+$/, '')}${WEBHOOK_PATH}`;
 
 async function call(method, body) {
   const r = await fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, {
@@ -38,6 +47,7 @@ await call('setMyCommands', {
     { command: 'sources', description: 'откуда берём курсы' },
     { command: 'status',  description: 'статус Pro у тебя' },
     { command: 'pro',     description: 'разблокировать Pro за 100 ⭐' },
+    { command: 'refund',  description: 'вернуть Stars за Pro' },
     { command: 'help',    description: 'список команд' }
   ]
 });
@@ -45,3 +55,14 @@ await call('setMyCommands', {
 await call('setChatMenuButton', {
   menu_button: { type: 'web_app', text: 'открыть', web_app: { url: URL } }
 });
+
+// setWebhook: задаём URL + secret_token. Без secret_token любой, знающий URL,
+// мог бы слать поддельные successful_payment. allowed_updates ограничивает,
+// что Telegram присылает (message + pre_checkout + payments).
+await call('setWebhook', {
+  url:             WEBHOOK_URL,
+  allowed_updates: ['message', 'pre_checkout_query'],
+  ...(WEBHOOK_SECRET ? { secret_token: WEBHOOK_SECRET } : {}),
+  drop_pending_updates: false,
+});
+console.log('webhook →', WEBHOOK_URL, WEBHOOK_SECRET ? '(with secret)' : '(no secret)');

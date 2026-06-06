@@ -11,6 +11,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const STARS_PRICE = Number(process.env.STARS_PRICE) || 100;
+// secret_token, который Telegram кладёт в заголовок X-Telegram-Bot-Api-Secret-Token
+// на каждом webhook-апдейте. Без него любой, кто знает URL, мог бы слать поддельные
+// обновления (фейковые successful_payment). Берётся из env, чтобы при rotate не
+// переразворачивать. Если не задан — webhook без проверки (как было раньше).
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
+const APP_PHOTO_URL  = process.env.APP_PHOTO_URL || 'https://converter.technology/invoice-photo.png';
 // Список Telegram user ID, которые всегда имеют Pro (без оплаты). Через запятую.
 const PRO_USER_IDS = new Set(
   (process.env.PRO_USER_IDS || '').split(',').map(s => Number(s.trim())).filter(Boolean)
@@ -30,9 +36,13 @@ const redis = (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_R
       token: process.env.UPSTASH_REDIS_REST_TOKEN
     })
   : null;
-const PAID_KEY = 'paid_users';
+const PAID_KEY    = 'paid_users';
+// Hash userId → telegram_payment_charge_id (последний платёж).
+// Нужно для refundStarPayment — без charge_id рефанд физически невозможен.
+const CHARGES_KEY = 'charges_by_user';
 
-const paidUsers = new Set();
+const paidUsers      = new Set();
+const chargesByUser  = new Map();  // userId(Number) → charge_id(String)
 
 async function loadPaidUsers() {
   if (!redis) return;
@@ -42,19 +52,38 @@ async function loadPaidUsers() {
       const n = Number(id);
       if (Number.isFinite(n)) paidUsers.add(n);
     }
-    console.log(`Loaded ${paidUsers.size} paid user(s) from Redis`);
+    const charges = await redis.hgetall(CHARGES_KEY);
+    for (const [uid, chargeId] of Object.entries(charges || {})) {
+      const n = Number(uid);
+      if (Number.isFinite(n) && chargeId) chargesByUser.set(n, String(chargeId));
+    }
+    console.log(`Loaded ${paidUsers.size} paid user(s), ${chargesByUser.size} charge(s) from Redis`);
   } catch (err) {
     console.error('Failed to load paid users from Redis:', err);
   }
 }
 
-async function markUserPaid(userId) {
+async function markUserPaid(userId, chargeId) {
   paidUsers.add(userId);
+  if (chargeId) chargesByUser.set(userId, chargeId);
   if (!redis) return;
   try {
     await redis.sadd(PAID_KEY, String(userId));
+    if (chargeId) await redis.hset(CHARGES_KEY, { [String(userId)]: chargeId });
   } catch (err) {
     console.error('Failed to persist paid user to Redis:', err);
+  }
+}
+
+async function unmarkUserPaid(userId) {
+  paidUsers.delete(userId);
+  chargesByUser.delete(userId);
+  if (!redis) return;
+  try {
+    await redis.srem(PAID_KEY, String(userId));
+    await redis.hdel(CHARGES_KEY, String(userId));
+  } catch (err) {
+    console.error('Failed to unpersist paid user from Redis:', err);
   }
 }
 
@@ -238,12 +267,15 @@ app.post('/api/create-invoice', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        title: 'ConverterPro++ — полная версия',
-        description: 'Свой курс и комиссия на каждой ступени конвертации. Разовая покупка — без подписки, навсегда.',
-        payload: `unlock:${user.id}:${Date.now()}`,
+        title:          'ConverterPro++ — полная версия',
+        description:    'Свой курс и комиссия на каждой ступени конвертации. Разовая покупка — без подписки, навсегда. Возврат — командой /refund в боте, в течение 21 дня.',
+        payload:        `unlock:${user.id}:${Date.now()}`,
         provider_token: '',
-        currency: 'XTR',
-        prices: [{ label: 'Pro', amount: STARS_PRICE }]
+        currency:       'XTR',
+        prices:         [{ label: 'Pro', amount: STARS_PRICE }],
+        photo_url:      APP_PHOTO_URL,
+        photo_width:    640,
+        photo_height:   360,
       })
     });
     const json = await response.json();
@@ -330,8 +362,23 @@ const HELP_TEXT =
   '/sources — откуда берутся курсы\n' +
   '/status — статус Pro у тебя\n' +
   '/pro — что даёт Pro и как купить\n' +
+  '/refund — вернуть Stars за Pro\n' +
   '/help — это меню\n\n' +
   '<i>Базовое бесплатно. Свой курс и комиссии на каждой ступени — Pro (100 ⭐, разово).</i>';
+
+const REFUND_OK_TEXT =
+  '✓ <b>Возврат выполнен.</b> Stars вернутся на твой баланс в Telegram. ' +
+  'Pro-доступ деактивирован — спасибо, что пробовал(а)! Если что-то не понравилось, ' +
+  'напиши обратной связью — постараемся учесть.';
+
+const REFUND_NO_PAYMENT_TEXT =
+  'У тебя нет активной Pro-покупки, которую можно вернуть. Если считаешь это ошибкой — ' +
+  'напиши в @BotSupport через Telegram (правила Stars: возврат возможен в течение 21 дня).';
+
+const REFUND_FAILED_TEXT =
+  '⚠️ Не получилось вернуть платёж автоматически. Возможно, прошло больше 21 дня ' +
+  'или charge_id уже использован. Напиши в Telegram Support — они инициируют рефанд ' +
+  'из своей стороны.';
 
 const SOURCES_TEXT =
   '<b>Откуда курсы</b>\n\n' +
@@ -344,7 +391,8 @@ const PRO_TEXT =
   '• свой курс на каждой ступени\n' +
   '• комиссии (%, абсолют)\n' +
   '• сохранение цепочек\n\n' +
-  'Открой приложение и нажми «разблокировать Pro».';
+  'Открой приложение и нажми «разблокировать Pro».\n\n' +
+  '<i>Передумаешь — /refund вернёт Stars в течение 21 дня.</i>';
 
 const START_TEXT =
   'привет!\n\n' +
@@ -353,16 +401,68 @@ const START_TEXT =
   'Базовое бесплатно. Pro (100 ⭐, разово) даёт свой курс и комиссии на каждой ступени.\n\n' +
   '/help — полный список команд';
 
+// Помогалка для refundStarPayment. Возвращает {ok, error?} — error мягкий,
+// чтобы шейдить юзеру понятный текст вместо raw Telegram-error'ов.
+async function refundStarPayment(userId, chargeId) {
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/refundStarPayment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, telegram_payment_charge_id: chargeId })
+    });
+    const j = await r.json();
+    if (j.ok) return { ok: true };
+    console.warn('refundStarPayment fail:', j);
+    return { ok: false, error: j.description || 'unknown' };
+  } catch (err) {
+    console.error('refundStarPayment error:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
 const webhookPath = BOT_TOKEN ? `/webhook/${BOT_TOKEN.split(':')[1] || 'tg'}` : '/webhook/disabled';
 app.post(webhookPath, async (req, res) => {
+  // Webhook-secret check: Telegram кладёт secret_token в этот заголовок при каждом
+  // апдейте. Если WEBHOOK_SECRET задан в env — должен совпасть, иначе обрываем
+  // (защита от подмены: иначе любой, кто знает webhook URL, мог бы слать поддельные
+  // successful_payment и активировать Pro бесплатно).
+  if (WEBHOOK_SECRET) {
+    const got = req.header('X-Telegram-Bot-Api-Secret-Token');
+    if (got !== WEBHOOK_SECRET) {
+      console.warn('Webhook secret mismatch — rejecting');
+      return res.status(401).json({ ok: false });
+    }
+  }
   const update = req.body || {};
 
+  // pre_checkout_query: Telegram спрашивает «можно ли провести платёж?» за 10 секунд
+  // до фактического списания Stars. Должны ответить ok:true иначе ok:false с
+  // error_message — это твой последний шанс отказать (нет наличия, мошенничество).
   if (update.pre_checkout_query) {
+    const q = update.pre_checkout_query;
+    let allow = false;
+    let reason = '';
+    // Валидация: payload должен быть нашим (unlock:<userId>:<ts>), userId
+    // совпадает с from.id (нельзя оплатить чужой unlock).
+    if (typeof q.invoice_payload === 'string' && q.invoice_payload.startsWith('unlock:')) {
+      const [, payloadUserId] = q.invoice_payload.split(':');
+      if (q.from?.id && Number(payloadUserId) === q.from.id) {
+        allow = true;
+      } else {
+        reason = 'Этот счёт выписан другому пользователю.';
+      }
+    } else {
+      reason = 'Платёж не относится к Converter++ Pro.';
+    }
     try {
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/answerPreCheckoutQuery`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pre_checkout_query_id: update.pre_checkout_query.id, ok: true })
+        body: JSON.stringify({
+          pre_checkout_query_id: q.id,
+          ok: allow,
+          ...(allow ? {} : { error_message: reason || 'Платёж отклонён.' })
+        })
       });
     } catch (err) {
       console.error('answerPreCheckoutQuery failed:', err);
@@ -393,6 +493,28 @@ app.post(webhookPath, async (req, res) => {
         ? '✓ <b>Pro активна.</b> Свой курс, комиссии и сохранение цепочек — доступны.'
         : 'Сейчас активна <b>бесплатная версия</b>. /pro чтобы разблокировать всё за 100 ⭐.';
       await sendChat(chatId, msg);
+    } else if (cmd === '/refund') {
+      // Self-service refund. Stars Terms требуют поддерживать возврат для
+      // digital goods в течение 21 дня; без этого Telegram может пожаловаться.
+      // Юзеры в PRO_USER_IDS (admin override) не возвращают — у них не было
+      // платежа, нечего возвращать.
+      if (!fromId) { await sendChat(chatId, REFUND_NO_PAYMENT_TEXT, false); }
+      else if (PRO_USER_IDS.has(fromId)) {
+        await sendChat(chatId, 'У тебя admin-доступ, не платный — рефанд не применяется.', false);
+      } else {
+        const chargeId = chargesByUser.get(fromId);
+        if (!chargeId || !paidUsers.has(fromId)) {
+          await sendChat(chatId, REFUND_NO_PAYMENT_TEXT, false);
+        } else {
+          const r = await refundStarPayment(fromId, chargeId);
+          if (r.ok) {
+            await unmarkUserPaid(fromId);
+            await sendChat(chatId, REFUND_OK_TEXT, false);
+          } else {
+            await sendChat(chatId, REFUND_FAILED_TEXT, false);
+          }
+        }
+      }
     }
   }
 
@@ -403,9 +525,11 @@ app.post(webhookPath, async (req, res) => {
     // с from.id сообщения — защита от подменённых webhook-запросов.
     const [, payloadUserId] = payment.invoice_payload.split(':');
     if (userId && Number(payloadUserId) === userId) {
-      await markUserPaid(userId);
-      console.log(`Unlocked Pro for user ${userId} (${payment.total_amount} stars)`);
-      await sendChat(userId, '🎉 <b>Pro разблокирована, навсегда.</b> Открывай приложение и пользуйся.');
+      // Сохраняем charge_id для будущего рефанда — без него refundStarPayment
+      // не сможем вызвать.
+      await markUserPaid(userId, payment.telegram_payment_charge_id);
+      console.log(`Unlocked Pro for user ${userId} (${payment.total_amount} stars, charge=${payment.telegram_payment_charge_id})`);
+      await sendChat(userId, '🎉 <b>Pro разблокирована, навсегда.</b> Открывай приложение и пользуйся.\n\n<i>Если что-то пойдёт не так — /refund вернёт Stars в течение 21 дня.</i>');
     } else {
       console.warn('Payment payload mismatch — ignoring', { payloadUserId, userId });
     }
