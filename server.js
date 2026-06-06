@@ -40,9 +40,14 @@ const PAID_KEY    = 'paid_users';
 // Hash userId → telegram_payment_charge_id (последний платёж).
 // Нужно для refundStarPayment — без charge_id рефанд физически невозможен.
 const CHARGES_KEY = 'charges_by_user';
+// Партнёрский доступ: блогеры/рекламные коллаборации. Не покупали Stars,
+// но Pro есть. Отдельный set, чтобы не путать с paid (нельзя рефандить
+// то, что не платили) и не путать с PRO_USER_IDS (env, hard-coded admin).
+const PARTNER_KEY = 'partner_users';
 
 const paidUsers      = new Set();
 const chargesByUser  = new Map();  // userId(Number) → charge_id(String)
+const partnerUsers   = new Set();  // userId(Number) — комп-доступ
 
 async function loadPaidUsers() {
   if (!redis) return;
@@ -57,10 +62,28 @@ async function loadPaidUsers() {
       const n = Number(uid);
       if (Number.isFinite(n) && chargeId) chargesByUser.set(n, String(chargeId));
     }
-    console.log(`Loaded ${paidUsers.size} paid user(s), ${chargesByUser.size} charge(s) from Redis`);
+    const partners = await redis.smembers(PARTNER_KEY);
+    for (const id of partners || []) {
+      const n = Number(id);
+      if (Number.isFinite(n)) partnerUsers.add(n);
+    }
+    console.log(`Loaded ${paidUsers.size} paid, ${partnerUsers.size} partner, ${chargesByUser.size} charge(s) from Redis`);
   } catch (err) {
     console.error('Failed to load paid users from Redis:', err);
   }
+}
+
+async function addPartnerUser(userId) {
+  partnerUsers.add(userId);
+  if (!redis) return;
+  try { await redis.sadd(PARTNER_KEY, String(userId)); }
+  catch (err) { console.error('addPartnerUser persist failed:', err); }
+}
+async function removePartnerUser(userId) {
+  partnerUsers.delete(userId);
+  if (!redis) return;
+  try { await redis.srem(PARTNER_KEY, String(userId)); }
+  catch (err) { console.error('removePartnerUser persist failed:', err); }
 }
 
 async function markUserPaid(userId, chargeId) {
@@ -88,7 +111,10 @@ async function unmarkUserPaid(userId) {
 }
 
 function isUnlocked(userId) {
-  return PRO_USER_IDS.has(userId) || paidUsers.has(userId);
+  return PRO_USER_IDS.has(userId) || paidUsers.has(userId) || partnerUsers.has(userId);
+}
+function isAdmin(userId) {
+  return userId != null && PRO_USER_IDS.has(userId);
 }
 
 const ratesCache = new Map();
@@ -361,10 +387,17 @@ const HELP_TEXT =
   '/rates — топ курсов прямо в чат\n' +
   '/sources — откуда берутся курсы\n' +
   '/status — статус Pro у тебя\n' +
+  '/me — твой Telegram ID\n' +
   '/pro — что даёт Pro и как купить\n' +
   '/refund — вернуть Stars за Pro\n' +
   '/help — это меню\n\n' +
   '<i>Базовое бесплатно. Свой курс и комиссии на каждой ступени — Pro (100 ⭐, разово).</i>';
+
+const ADMIN_HELP_TEXT =
+  '\n\n<b>Админ:</b>\n' +
+  '/grant &lt;user_id&gt; [метка] — выдать партнёрский Pro\n' +
+  '/revoke &lt;user_id&gt; — забрать партнёрский Pro\n' +
+  '/partners — список партнёров';
 
 const REFUND_OK_TEXT =
   '✓ <b>Возврат выполнен.</b> Stars вернутся на твой баланс в Telegram. ' +
@@ -479,7 +512,19 @@ app.post(webhookPath, async (req, res) => {
     if (cmd === '/start') {
       await sendChat(chatId, START_TEXT);
     } else if (cmd === '/help') {
-      await sendChat(chatId, HELP_TEXT, false);
+      // Админу прикладываем секцию с /grant /revoke /partners — обычным юзерам не показываем,
+      // чтобы не дразнить недоступным.
+      const helpExt = isAdmin(fromId) ? HELP_TEXT + ADMIN_HELP_TEXT : HELP_TEXT;
+      await sendChat(chatId, helpExt, false);
+    } else if (cmd === '/me') {
+      const role = isAdmin(fromId)
+        ? 'admin'
+        : partnerUsers.has(fromId)
+          ? 'partner'
+          : paidUsers.has(fromId)
+            ? 'paid'
+            : 'free';
+      await sendChat(chatId, `Твой ID: <code>${fromId}</code>\nСтатус: <b>${role}</b>`, false);
     } else if (cmd === '/pro') {
       await sendChat(chatId, PRO_TEXT);
     } else if (cmd === '/sources') {
@@ -493,6 +538,56 @@ app.post(webhookPath, async (req, res) => {
         ? '✓ <b>Pro активна.</b> Свой курс, комиссии и сохранение цепочек — доступны.'
         : 'Сейчас активна <b>бесплатная версия</b>. /pro чтобы разблокировать всё за 100 ⭐.';
       await sendChat(chatId, msg);
+    } else if (cmd === '/grant' || cmd === '/revoke' || cmd === '/partners') {
+      // Admin-only команды для управления партнёрским доступом.
+      if (!isAdmin(fromId)) {
+        // Молчим — не сигналим о существовании команд, чтобы не дразнить.
+        // (Команды не зарегистрированы в setMyCommands, появляются только в /help админа.)
+      } else if (cmd === '/partners') {
+        const ids = [...partnerUsers];
+        if (ids.length === 0) {
+          await sendChat(chatId, 'Партнёров пока нет. Выдай доступ через /grant &lt;user_id&gt;.', false);
+        } else {
+          const head = `<b>Партнёров: ${ids.length}</b>`;
+          const list = ids.slice(0, 30).map(id => `• <code>${id}</code>`).join('\n');
+          const tail = ids.length > 30 ? `\n…и ещё ${ids.length - 30}` : '';
+          await sendChat(chatId, `${head}\n${list}${tail}`, false);
+        }
+      } else if (cmd === '/grant') {
+        // /grant <user_id> [optional метка для логов]
+        const args = text.slice(cmd.length).trim().split(/\s+/);
+        const targetId = Number(args[0]);
+        const note     = args.slice(1).join(' ').slice(0, 80);  // limit length
+        if (!Number.isFinite(targetId) || targetId <= 0) {
+          await sendChat(chatId, 'Формат: <code>/grant &lt;user_id&gt; [метка]</code>\nID юзера он может узнать командой /me.', false);
+        } else if (partnerUsers.has(targetId)) {
+          await sendChat(chatId, `Юзер <code>${targetId}</code> уже партнёр.`, false);
+        } else if (PRO_USER_IDS.has(targetId)) {
+          await sendChat(chatId, `Юзер <code>${targetId}</code> уже admin (через env) — отдельный partner не нужен.`, false);
+        } else {
+          await addPartnerUser(targetId);
+          const label = note ? ` (${note})` : '';
+          console.log(`Partner granted: ${targetId} by admin ${fromId}${label}`);
+          await sendChat(chatId, `✓ Партнёрский Pro выдан юзеру <code>${targetId}</code>${label ? `\nметка: ${note}` : ''}\n\nОн увидит Pro как только перезайдёт в приложение.`, false);
+          // Попытка уведомить самого партнёра (если бот может ему писать —
+          // он должен был хотя бы раз нажать /start). Тихо игнорируем ошибки.
+          try {
+            await sendChat(targetId, '🎁 <b>Тебе выдали партнёрский Pro в Converter++.</b>\n\nОткрой приложение — все Pro-функции уже доступны.');
+          } catch {}
+        }
+      } else if (cmd === '/revoke') {
+        const args = text.slice(cmd.length).trim().split(/\s+/);
+        const targetId = Number(args[0]);
+        if (!Number.isFinite(targetId) || targetId <= 0) {
+          await sendChat(chatId, 'Формат: <code>/revoke &lt;user_id&gt;</code>', false);
+        } else if (!partnerUsers.has(targetId)) {
+          await sendChat(chatId, `Юзер <code>${targetId}</code> не партнёр.`, false);
+        } else {
+          await removePartnerUser(targetId);
+          console.log(`Partner revoked: ${targetId} by admin ${fromId}`);
+          await sendChat(chatId, `✓ Партнёрский доступ убран у юзера <code>${targetId}</code>.`, false);
+        }
+      }
     } else if (cmd === '/refund') {
       // Self-service refund. Stars Terms требуют поддерживать возврат для
       // digital goods в течение 21 дня; без этого Telegram может пожаловаться.
@@ -501,6 +596,8 @@ app.post(webhookPath, async (req, res) => {
       if (!fromId) { await sendChat(chatId, REFUND_NO_PAYMENT_TEXT, false); }
       else if (PRO_USER_IDS.has(fromId)) {
         await sendChat(chatId, 'У тебя admin-доступ, не платный — рефанд не применяется.', false);
+      } else if (partnerUsers.has(fromId)) {
+        await sendChat(chatId, 'У тебя партнёрский Pro (без оплаты Stars) — рефанд не применяется.', false);
       } else {
         const chargeId = chargesByUser.get(fromId);
         if (!chargeId || !paidUsers.has(fromId)) {

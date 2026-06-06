@@ -46,11 +46,17 @@ await call('setMyCommands', {
     { command: 'rates',   description: 'топ курсов в чат' },
     { command: 'sources', description: 'откуда берём курсы' },
     { command: 'status',  description: 'статус Pro у тебя' },
+    { command: 'me',      description: 'твой Telegram ID' },
     { command: 'pro',     description: 'разблокировать Pro за 100 ⭐' },
     { command: 'refund',  description: 'вернуть Stars за Pro' },
     { command: 'help',    description: 'список команд' }
   ]
 });
+
+// Admin-команды (/grant /revoke /partners) НЕ кладём в setMyCommands —
+// они должны существовать, но не дразнить обычных юзеров в меню.
+// Админ видит их в /help (с автоматическим append'ом ADMIN_HELP_TEXT)
+// и просто печатает руками.
 
 await call('setChatMenuButton', {
   menu_button: { type: 'web_app', text: 'открыть', web_app: { url: URL } }
