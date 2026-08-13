@@ -10,7 +10,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT) || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
-const STARS_PRICE = Number(process.env.STARS_PRICE) || 100;
+const STARS_PRICE = Math.max(1, Math.round(Number(process.env.STARS_PRICE) || 399));
+const FREE_MAX_CURRENCIES = 3;
 // secret_token, который Telegram кладёт в заголовок X-Telegram-Bot-Api-Secret-Token
 // на каждом webhook-апдейте. Без него любой, кто знает URL, мог бы слать поддельные
 // обновления (фейковые successful_payment). Берётся из env, чтобы при rotate не
@@ -396,13 +397,15 @@ function verifyInitData(initData) {
 
 app.post('/api/me', (req, res) => {
   const user = verifyInitData(req.body?.initData);
-  if (!user) return res.json({ unlocked: false });
+  const plan = { proPrice: STARS_PRICE, freeMaxCurrencies: FREE_MAX_CURRENCIES };
+  if (!user) return res.json({ unlocked: false, ...plan });
   // Track активность — каждое открытие Mini App обновит last_seen.
   // Не блокируем response: fire-and-forget.
   trackUser(user.id, user.first_name || '', user.username || '').catch(() => {});
   res.json({
     unlocked: isUnlocked(user.id),
-    user: { id: user.id, first_name: user.first_name }
+    user: { id: user.id, first_name: user.first_name },
+    ...plan
   });
 });
 
@@ -494,8 +497,8 @@ app.post('/api/create-invoice', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        title:          'ConverterPro++ — полная версия',
-        description:    'Свой курс и комиссия на каждой ступени конвертации. Разовая покупка — без подписки, навсегда. Возврат — командой /refund в боте, в течение 21 дня.',
+        title:          'ConverterPro++ — навсегда',
+        description:    'Цепочки от четырёх валют, свои курсы, комиссии и сохранённые сценарии. Разовая покупка без подписки. Возврат — /refund в течение 21 дня.',
         payload:        `unlock:${user.id}:${Date.now()}`,
         provider_token: '',
         currency:       'XTR',
@@ -592,7 +595,7 @@ const HELP_TEXT =
   '/pro — что даёт Pro и как купить\n' +
   '/refund — вернуть Stars за Pro\n' +
   '/help — это меню\n\n' +
-  '<i>Базовое бесплатно. Свой курс и комиссии на каждой ступени — Pro (100 ⭐, разово).</i>';
+  `<i>Free: до ${FREE_MAX_CURRENCIES} валют по актуальным курсам. Pro: 4+ валют, свои курсы, комиссии и сохранение — ${STARS_PRICE} ⭐ навсегда.</i>`;
 
 const ADMIN_HELP_TEXT =
   '\n\n<b>Админ:</b>\n' +
@@ -652,7 +655,8 @@ const SOURCES_TEXT =
   'Кеш — 1 час. В приложении можно выбрать какой источник использовать.';
 
 const PRO_TEXT =
-  '<b>Pro</b> — 100 ⭐, разово, навсегда:\n' +
+  `<b>Pro</b> — ${STARS_PRICE} ⭐, разово, навсегда:\n` +
+  '• цепочки от четырёх валют и без лимита\n' +
   '• свой курс на каждой ступени\n' +
   '• комиссии (%, абсолют)\n' +
   '• сохранение цепочек\n\n' +
@@ -663,7 +667,7 @@ const START_TEXT =
   'привет!\n\n' +
   'Converter++ — цепочки конвертации валют и крипты. ' +
   'Сколько USD → EUR → BTC у тебя получится — в один экран.\n\n' +
-  'Базовое бесплатно. Pro (100 ⭐, разово) даёт свой курс и комиссии на каждой ступени.\n\n' +
+  `Free — цепочки до ${FREE_MAX_CURRENCIES} валют по актуальным курсам. Pro (${STARS_PRICE} ⭐, разово) снимает лимит и даёт свои курсы, комиссии и сохранение.\n\n` +
   '/help — полный список команд';
 
 // Помогалка для refundStarPayment. Возвращает {ok, error?} — error мягкий,
@@ -709,7 +713,9 @@ app.post(webhookPath, async (req, res) => {
     let reason = '';
     // Валидация: payload должен быть нашим (unlock:<userId>:<ts>), userId
     // совпадает с from.id (нельзя оплатить чужой unlock).
-    if (typeof q.invoice_payload === 'string' && q.invoice_payload.startsWith('unlock:')) {
+    if (q.currency !== 'XTR' || Number(q.total_amount) !== STARS_PRICE) {
+      reason = 'Цена счёта устарела. Создай новый счёт в приложении.';
+    } else if (typeof q.invoice_payload === 'string' && q.invoice_payload.startsWith('unlock:')) {
       const [, payloadUserId] = q.invoice_payload.split(':');
       if (q.from?.id && Number(payloadUserId) === q.from.id) {
         allow = true;
@@ -774,7 +780,7 @@ app.post(webhookPath, async (req, res) => {
       const unlocked = fromId ? isUnlocked(fromId) : false;
       const msg = unlocked
         ? '✓ <b>Pro активна.</b> Свой курс, комиссии и сохранение цепочек — доступны.'
-        : 'Сейчас активна <b>бесплатная версия</b>. /pro чтобы разблокировать всё за 100 ⭐.';
+        : `Сейчас активна <b>бесплатная версия</b>: до ${FREE_MAX_CURRENCIES} валют в цепочке. /pro — полный доступ за ${STARS_PRICE} ⭐ навсегда.`;
       await sendChat(chatId, msg);
     } else if (
       cmd === '/apps_open' || cmd === '/apps_close' || cmd === '/apps' ||
@@ -992,7 +998,10 @@ app.post(webhookPath, async (req, res) => {
     // Сверяем userId из payload (мы его туда положили при createInvoiceLink)
     // с from.id сообщения — защита от подменённых webhook-запросов.
     const [, payloadUserId] = payment.invoice_payload.split(':');
-    if (userId && Number(payloadUserId) === userId) {
+    const validPrice = payment.currency === 'XTR' && Number(payment.total_amount) === STARS_PRICE;
+    if (!validPrice) {
+      console.warn('Payment amount mismatch — ignoring', { currency: payment.currency, total: payment.total_amount });
+    } else if (userId && Number(payloadUserId) === userId) {
       // Сохраняем charge_id для будущего рефанда — без него refundStarPayment
       // не сможем вызвать.
       await markUserPaid(userId, payment.telegram_payment_charge_id);

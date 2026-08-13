@@ -11,6 +11,15 @@ const hapticNotif = (k) => { try { tg?.HapticFeedback?.notificationOccurred?.(k)
 // Запущены ли мы внутри Telegram (mini app) или в обычном браузере (на сайте).
 // В браузере initData пустая — Stars-платежи и Pro-функции работать не могут.
 const BOT_LINK = 'https://t.me/personal_converter_bot';
+const BUSINESS_LINK = `https://t.me/Yasha_Vozhakin?text=${encodeURIComponent('Привет! Хочу обсудить брендированный Converter++ для моего канала или сервиса.')}`;
+const DEFAULT_PRO_PRICE = 399;
+const DEFAULT_FREE_MAX_CURRENCIES = 3;
+const PRESETS = {
+  steam: { source: 'cbr', codes: ['RUB', 'KZT', 'USD'], label: 'Steam' },
+  relocation: { source: 'open', codes: ['RUB', 'USDT', 'GEL'], label: 'Релокация' },
+  purchases: { source: 'open', codes: ['RUB', 'USDT', 'CNY'], label: 'Закупки' },
+  exchange: { source: 'open', codes: ['USDT', 'KZT', 'RUB'], label: 'Обменник' }
+};
 function isInTelegram() {
   return !!(tg && tg.initData);
 }
@@ -123,6 +132,8 @@ const state = {
   unlocked: false,
   editing: null
 };
+let proPrice = DEFAULT_PRO_PRICE;
+let freeMaxCurrencies = DEFAULT_FREE_MAX_CURRENCIES;
 
 const POPULAR = ['RUB', 'USD', 'EUR', 'KZT', 'CNY', 'GBP', 'JPY', 'TRY', 'BYN', 'UAH', 'AMD', 'AZN', 'GEL', 'KGS', 'UZS'];
 const MAJOR = ['CHF', 'CAD', 'AUD', 'NZD', 'HKD', 'SGD', 'KRW', 'INR', 'BRL', 'MXN', 'ZAR', 'AED', 'SAR', 'ILS', 'NOK', 'SEK', 'DKK', 'PLN', 'CZK', 'HUF', 'THB', 'IDR', 'MYR', 'PHP', 'VND', 'TWD', 'EGP', 'PKR'];
@@ -138,6 +149,8 @@ const $ = (id) => document.getElementById(id);
 const el = {
   chain: $('chain'),
   addStep: $('addStep'),
+  presetGrid: $('presetGrid'),
+  businessCta: $('businessCta'),
   reverseChain: $('reverseChain'),
   shareChain: $('shareChain'),
   summary: $('summary'),
@@ -265,6 +278,36 @@ function saveState() {
       source: state.source, from: state.from, steps: state.steps, anchor: state.anchor
     }));
   } catch {}
+}
+
+function syncCommercialUi() {
+  document.querySelectorAll('[data-pro-price]').forEach(node => {
+    node.textContent = String(proPrice);
+  });
+}
+
+function chainCurrencyCount() {
+  return state.steps.length + 1;
+}
+
+function enforceFreePlan() {
+  if (state.unlocked) return false;
+  let changed = false;
+  if (chainCurrencyCount() > freeMaxCurrencies) {
+    state.steps = state.steps.slice(0, Math.max(1, freeMaxCurrencies - 1));
+    changed = true;
+  }
+  state.steps = state.steps.map(step => {
+    if (!step.fee && !step.customRate) return step;
+    changed = true;
+    return { ...step, fee: 0, customRate: null };
+  });
+  if (state.anchor.index > state.steps.length) {
+    state.anchor = { index: 0, amount: Number(state.anchor.amount) || 1 };
+    changed = true;
+  }
+  if (changed) saveState();
+  return changed;
 }
 
 // Share-link: web URL вида ?c=USD-EUR-BTC&a=100&s=cbr.
@@ -503,6 +546,16 @@ function render() {
 
   attachHandlers();
   renderSummary(flow);
+  const atFreeLimit = !state.unlocked && chainCurrencyCount() >= freeMaxCurrencies;
+  el.addStep.classList.toggle('limit-reached', atFreeLimit);
+  el.addStep.textContent = atFreeLimit
+    ? `🔒 Free: ${freeMaxCurrencies} валюты · Pro — больше`
+    : '＋ Добавить валюту';
+  document.querySelectorAll('[data-preset]').forEach(button => {
+    const preset = PRESETS[button.dataset.preset];
+    const currentCodes = [state.from, ...state.steps.map(step => step.to)];
+    button.classList.toggle('active', Boolean(preset) && preset.codes.join('|') === currentCodes.join('|'));
+  });
 }
 
 function renderSummary(flow) {
@@ -620,6 +673,32 @@ function defaultNextCurrency() {
   for (const c of POPULAR) if (state.rates[c] && !used.has(c)) return c;
   for (const c of Object.keys(state.rates)) if (!used.has(c)) return c;
   return 'USD';
+}
+
+async function applyPreset(key) {
+  const preset = PRESETS[key];
+  if (!preset) return;
+  const buttons = [...document.querySelectorAll('[data-preset]')];
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    if (state.source !== preset.source) await loadRates(preset.source);
+    const missing = preset.codes.find(code => !state.rates?.[code]);
+    if (missing) throw new Error(`Нет курса ${missing}`);
+    const amount = Number(state.anchor.amount) || 1;
+    state.from = preset.codes[0];
+    state.steps = preset.codes.slice(1).map(to => ({ to, fee: 0, customRate: null }));
+    state.anchor = { index: 0, amount };
+    saveState();
+    render();
+    haptic('light');
+    showToast(`Сценарий «${preset.label}» готов`);
+  } catch (err) {
+    console.error('applyPreset', err);
+    showToast('Не удалось загрузить сценарий');
+    hapticNotif('error');
+  } finally {
+    buttons.forEach(button => { button.disabled = false; });
+  }
 }
 
 // ---------- currency picker sheet ----------
@@ -862,7 +941,7 @@ function renderStacks() {
         <div class="stacks-lock-icon">⭐</div>
         <div class="stacks-lock-title">Сохранение цепочек — в Pro</div>
         <div class="stacks-lock-text">Сохраняйте готовые конфигурации обмена со всеми кастомными курсами и комиссиями. Возвращайтесь к любимым одним тапом.</div>
-        <button type="button" class="stacks-lock-cta" id="stacksLockCta">Купить полную версию · <strong>100 ⭐</strong></button>
+        <button type="button" class="stacks-lock-cta" id="stacksLockCta">Купить полную версию · <strong>${proPrice} ⭐</strong></button>
       </div>
     `;
     const cta = document.getElementById('stacksLockCta');
@@ -971,6 +1050,10 @@ async function checkUnlock() {
     });
     const data = await r.json();
     state.unlocked = !!data.unlocked;
+    proPrice = Number(data.proPrice) || DEFAULT_PRO_PRICE;
+    freeMaxCurrencies = Number(data.freeMaxCurrencies) || DEFAULT_FREE_MAX_CURRENCIES;
+    syncCommercialUi();
+    enforceFreePlan();
     applyUnlockUi();
     // Если шит со стопками открыт — обновим его (paywall → unlocked-view после оплаты)
     if (!el.stacksSheet.classList.contains('hidden')) renderStacks();
@@ -1142,10 +1225,26 @@ if (el.roundToggle) {
 }
 
 el.addStep.addEventListener('click', () => {
+  if (!state.unlocked && chainCurrencyCount() >= freeMaxCurrencies) {
+    showToast(`В Free доступно до ${freeMaxCurrencies} валют. Pro снимает лимит.`);
+    hapticNotif('error');
+    return;
+  }
   state.steps.push({ to: defaultNextCurrency(), fee: 0, customRate: null });
   haptic('light');
   saveState();
   render();
+});
+
+el.presetGrid?.addEventListener('click', event => {
+  const button = event.target.closest('[data-preset]');
+  if (button) applyPreset(button.dataset.preset);
+});
+
+el.businessCta?.addEventListener('click', () => {
+  haptic('medium');
+  if (tg?.openTelegramLink) tg.openTelegramLink(BUSINESS_LINK);
+  else window.open(BUSINESS_LINK, '_blank', 'noopener,noreferrer');
 });
 
 el.reverseChain.addEventListener('click', () => {

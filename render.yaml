@@ -10,6 +10,6 @@ services:
       - key: NODE_VERSION
         value: "20"
       - key: STARS_PRICE
-        value: "100"
+        value: "399"
       - key: BOT_TOKEN
         sync: false

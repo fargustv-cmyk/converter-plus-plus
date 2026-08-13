@@ -8,11 +8,16 @@
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <meta name="theme-color" content="#0066ff">
   <meta name="description" content="Многоступенчатая конвертация валют. Курсы ЦБ РФ и крипта. Свой курс и комиссия на каждой ступени.">
+  <meta property="og:title" content="Converter++ — цепочки валют с комиссиями">
+  <meta property="og:description" content="Узнайте, сколько реально дойдёт через USDT, банки и обменники.">
+  <meta property="og:image" content="https://converter.technology/invoice-photo.png">
+  <meta property="og:url" content="https://converter.technology/">
+  <link rel="canonical" href="https://converter.technology/">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=16">
+  <link rel="stylesheet" href="styles.css?v=17">
 </head>
 <body>
   <main>
@@ -27,10 +32,38 @@
       <button type="button" class="tab tab-icon" id="stacksBtn" title="Сохранённые цепочки" aria-label="Сохранённые">★</button>
     </div>
 
+    <section class="presets" aria-labelledby="presetsTitle">
+      <div class="section-heading">
+        <div>
+          <div class="section-kicker">Начать быстро</div>
+          <h2 id="presetsTitle">Готовые сценарии</h2>
+        </div>
+        <span class="free-label">Free · 3 валюты</span>
+      </div>
+      <div class="preset-grid" id="presetGrid">
+        <button type="button" class="preset-card" data-preset="steam">
+          <span class="preset-icon">🎮</span>
+          <span><strong>Steam</strong><small>RUB → KZT → USD</small></span>
+        </button>
+        <button type="button" class="preset-card" data-preset="relocation">
+          <span class="preset-icon">🧳</span>
+          <span><strong>Релокация</strong><small>RUB → USDT → GEL</small></span>
+        </button>
+        <button type="button" class="preset-card" data-preset="purchases">
+          <span class="preset-icon">📦</span>
+          <span><strong>Закупки</strong><small>RUB → USDT → CNY</small></span>
+        </button>
+        <button type="button" class="preset-card" data-preset="exchange">
+          <span class="preset-icon">🏦</span>
+          <span><strong>Обменник</strong><small>USDT → KZT → RUB</small></span>
+        </button>
+      </div>
+    </section>
+
     <section class="chain" id="chain"></section>
 
     <div class="chain-actions">
-      <button id="addStep" type="button" class="ghost">＋ Добавить ступень</button>
+      <button id="addStep" type="button" class="ghost">＋ Добавить валюту</button>
       <button id="reverseChain" type="button" class="ghost icon-only" title="Развернуть" aria-label="Развернуть">⇅</button>
       <button id="shareChain" type="button" class="ghost icon-only" title="Поделиться цепочкой" aria-label="Поделиться">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -49,15 +82,15 @@
       <div class="pro-card">
         <div class="pro-icon">✨</div>
         <div class="pro-body">
-          <div class="pro-title">Полная версия</div>
-          <p class="pro-text">Свой курс и комиссия на каждой ступени — для Steam, банков, обменников.</p>
+          <div class="pro-title">ConverterPro++</div>
+          <p class="pro-text">Четыре валюты и больше, свои курсы, комиссии и сохранение цепочек.</p>
           <div class="pro-meta">
-            <span class="pro-badge">✓ Разовая покупка</span>
+            <span class="pro-badge">✓ 4+ валют</span>
+            <span class="pro-badge">✓ Свои условия</span>
             <span class="pro-badge">✓ Навсегда</span>
-            <span class="pro-badge">✓ Без подписки</span>
           </div>
         </div>
-        <button id="buyPro" class="pro-btn" type="button">100&nbsp;⭐</button>
+        <button id="buyPro" class="pro-btn" type="button"><span data-pro-price>399</span>&nbsp;⭐</button>
       </div>
     </section>
 
@@ -71,6 +104,17 @@
           <p class="partner-text" id="partnerText">Бесплатный Pro в обмен на упоминание у себя в соцсетях. Подай заявку — рассмотрим.</p>
         </div>
         <button id="partnerCta" class="partner-btn" type="button">Подать</button>
+      </div>
+    </section>
+
+    <section class="business">
+      <div class="business-card">
+        <div class="business-icon">B2B</div>
+        <div class="business-body">
+          <div class="business-title">Калькулятор под вашим брендом</div>
+          <p class="business-text">Для Telegram-канала, обменника или сервиса: ваши валюты, сценарии, логотип и CTA.</p>
+        </div>
+        <button id="businessCta" class="business-btn" type="button">Обсудить</button>
       </div>
     </section>
 
@@ -192,7 +236,7 @@
       </div>
 
       <div class="editor-pro-lock hidden" id="proLockBanner">
-        🔒 Доступно в полной версии — <strong>100 ⭐</strong> · разовая покупка
+        🔒 Доступно в Pro — <strong><span data-pro-price>399</span> ⭐</strong> · разовая покупка
       </div>
 
       <div class="editor-actions">
@@ -202,6 +246,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=16"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>

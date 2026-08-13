@@ -9,6 +9,7 @@
 const TOKEN          = process.env.BOT_TOKEN;
 const URL            = process.env.APP_URL || 'https://converter.technology';
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
+const STARS_PRICE    = Math.max(1, Math.round(Number(process.env.STARS_PRICE) || 399));
 if (!TOKEN) { console.error('BOT_TOKEN env required'); process.exit(1); }
 // webhookPath ДОЛЖЕН совпадать с server.js — там тот же формат.
 const WEBHOOK_PATH = `/webhook/${TOKEN.split(':')[1] || 'tg'}`;
@@ -29,15 +30,15 @@ async function call(method, body) {
 await call('setMyName', { name: 'Converter++' });
 
 await call('setMyShortDescription', {
-  short_description: 'Многоступенчатая конвертация валют и крипты. Свой курс и комиссия на каждой ступени — в Pro.'
+  short_description: 'Цепочки до 3 валют бесплатно. Безлимит, свои курсы, комиссии и сохранение — в Pro.'
 });
 
 await call('setMyDescription', {
   description:
     'Converter++ — конвертер валют и крипты с цепочками.\n\n' +
     'Курсы тянем с ЦБ РФ и fawazahmed0/currency-api: фиат, стейблы, BTC/ETH и десятки других.\n\n' +
-    'Бесплатно: любые цепочки на свежих рыночных курсах.\n\n' +
-    'Pro (разово, 100 ⭐): свой курс на каждой ступени, комиссии (%, абсолют), сохранение цепочек. Без подписки — навсегда.'
+    'Бесплатно: цепочки до 3 валют на свежих рыночных курсах.\n\n' +
+    `Pro (разово, ${STARS_PRICE} ⭐): 4+ валют, свой курс на каждой ступени, комиссии и сохранение цепочек. Без подписки — навсегда.`
 });
 
 await call('setMyCommands', {
@@ -47,7 +48,7 @@ await call('setMyCommands', {
     { command: 'sources', description: 'откуда берём курсы' },
     { command: 'status',  description: 'статус Pro у тебя' },
     { command: 'me',      description: 'твой Telegram ID' },
-    { command: 'pro',     description: 'разблокировать Pro за 100 ⭐' },
+    { command: 'pro',     description: `разблокировать Pro за ${STARS_PRICE} ⭐` },
     { command: 'refund',  description: 'вернуть Stars за Pro' },
     { command: 'help',    description: 'список команд' }
   ]
