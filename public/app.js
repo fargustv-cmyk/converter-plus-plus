@@ -229,6 +229,20 @@ function formatRate(n) {
   return n.toFixed(10).replace(/0+$/, '').replace(/\.$/, '');
 }
 
+// Rates below one are mathematically correct but hard to read at a glance:
+// `1 RUB = 0.0118 USD` makes people mentally invert the number. Keep the
+// calculation direction unchanged, but present the pair in the orientation
+// where one unit maps to a value of at least one: `1 USD = 84.54 RUB`.
+function rateForDisplay(fromCode, toCode, rate, orientationRate = rate) {
+  const inverted = Number.isFinite(orientationRate) && orientationRate > 0 && orientationRate < 1;
+  return {
+    fromCode: inverted ? toCode : fromCode,
+    toCode: inverted ? fromCode : toCode,
+    rate: inverted && Number.isFinite(rate) && rate > 0 ? 1 / rate : rate,
+    inverted
+  };
+}
+
 function formatForInput(n) {
   if (!Number.isFinite(n)) return '';
   const abs = Math.abs(n);
@@ -509,13 +523,14 @@ function rowHtml(row, i, opts) {
 
 function transitionHtml(t, i, fee, fromCode, toCode) {
   const rate = t.isCustom ? t.rate : t.market;
+  const display = rateForDisplay(fromCode, toCode, rate, t.market);
   const rateClass = 'rate-pill' + (t.isCustom ? ' custom' : '');
   const feeClass = 'fee-pill' + (fee > 0 ? ' active' : '');
   return `
     <div class="transition" data-transition="${i}">
       <button class="${rateClass}" type="button" data-edit-rate="${i}" title="Курс конвертации">
         <span class="pill-icon">${t.isCustom ? '🔒' : '↓'}</span>
-        <span class="pill-text">1 ${tickerHtml(fromCode)} = ${formatRate(rate)} ${tickerHtml(toCode)}</span>
+        <span class="pill-text">1 ${tickerHtml(display.fromCode)} = ${formatRate(display.rate)} ${tickerHtml(display.toCode)}</span>
       </button>
       <button class="${feeClass}" type="button" data-edit-fee="${i}" title="Комиссия">
         <span class="pill-icon">💰</span>
@@ -567,6 +582,7 @@ function renderSummary(flow) {
   }
   const rate = last.amount / first.amount;
   const market = marketRate(first.code, last.code);
+  const display = rateForDisplay(first.code, last.code, rate, market);
   const lossPct = market ? ((market - rate) / market) * 100 : 0;
   const lossText = Math.abs(lossPct) > 0.005
     ? `<span class="${lossPct > 0 ? 'loss' : 'gain'}">${lossPct > 0 ? '−' : '+'}${Math.abs(lossPct).toFixed(2)}%</span>`
@@ -586,7 +602,7 @@ function renderSummary(flow) {
   el.summary.innerHTML = `
     <div class="sum-row">
       <span class="sum-label">Эффективный курс</span>
-      <span class="sum-value">1 ${tickerHtml(first.code)} = ${formatRate(rate)} ${tickerHtml(last.code)} ${lossText}</span>
+      <span class="sum-value">1 ${tickerHtml(display.fromCode)} = ${formatRate(display.rate)} ${tickerHtml(display.toCode)} ${lossText}</span>
     </div>
     ${feeRow}
   `;
@@ -839,12 +855,14 @@ function openRateSheet(stepIndex, mode = 'rate') {
   const fromCode = codes[stepIndex];
   const toCode = codes[stepIndex + 1];
   const market = marketRate(fromCode, toCode);
+  const marketDisplay = rateForDisplay(fromCode, toCode, market);
+  const customDisplay = rateForDisplay(fromCode, toCode, step.customRate, market);
 
-  el.rateFromCode.innerHTML = tickerHtml(fromCode);
-  el.rateToCode.innerHTML = tickerHtml(toCode);
-  el.rateInput.value = Number.isFinite(step.customRate) ? step.customRate : '';
-  el.rateInput.placeholder = formatRate(market);
-  el.rateMarket.innerHTML = `Рыночный курс: 1 ${tickerHtml(fromCode)} = <strong>${formatRate(market)}</strong> ${tickerHtml(toCode)}`;
+  el.rateFromCode.innerHTML = tickerHtml(marketDisplay.fromCode);
+  el.rateToCode.innerHTML = tickerHtml(marketDisplay.toCode);
+  el.rateInput.value = Number.isFinite(step.customRate) ? formatForInput(customDisplay.rate) : '';
+  el.rateInput.placeholder = formatRate(marketDisplay.rate);
+  el.rateMarket.innerHTML = `Рыночный курс: 1 ${tickerHtml(marketDisplay.fromCode)} = <strong>${formatRate(marketDisplay.rate)}</strong> ${tickerHtml(marketDisplay.toCode)}`;
   el.feeInput.value = step.fee || '';
 
   // Show only the section that corresponds to the tapped pill
@@ -880,7 +898,13 @@ el.rateApply.addEventListener('click', () => {
     step.fee = Number.isFinite(f) ? clamp(f, 0, 100) : 0;
   } else {
     const r = parseFloat(el.rateInput.value);
-    step.customRate = Number.isFinite(r) && r > 0 ? r : null;
+    const codes = [state.from, ...state.steps.map(s => s.to)];
+    const fromCode = codes[state.editing];
+    const toCode = codes[state.editing + 1];
+    const marketDisplay = rateForDisplay(fromCode, toCode, marketRate(fromCode, toCode));
+    step.customRate = Number.isFinite(r) && r > 0
+      ? (marketDisplay.inverted ? 1 / r : r)
+      : null;
   }
   haptic('light');
   saveState();
